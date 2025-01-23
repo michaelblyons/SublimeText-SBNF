@@ -16,7 +16,7 @@ pub struct Node<'a> {
 
 fn fmt_inner_parameters(
     f: &mut std::fmt::Formatter,
-    params: &Vec<Node<'_>>,
+    params: &[Node<'_>],
     start: &str,
     end: &str,
 ) -> std::fmt::Result {
@@ -83,7 +83,7 @@ impl<'a> Node<'a> {
     }
 }
 
-impl<'a> std::fmt::Debug for Node<'a> {
+impl std::fmt::Debug for Node<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "<")?;
 
@@ -274,7 +274,7 @@ pub struct TextLocationWithSource<'a> {
     source: &'a str,
 }
 
-impl<'a> std::fmt::Display for TextLocationWithSource<'a> {
+impl std::fmt::Display for TextLocationWithSource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let display_line = self.loc.line + 1;
 
@@ -323,7 +323,7 @@ pub struct ParseErrorWithSource<'a> {
     source: &'a str,
 }
 
-impl<'a> std::fmt::Display for ParseErrorWithSource<'a> {
+impl std::fmt::Display for ParseErrorWithSource<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

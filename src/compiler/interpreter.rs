@@ -37,7 +37,7 @@ pub struct KeyWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Debug for KeyWithCompiler<'a> {
+impl std::fmt::Debug for KeyWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.compiler.resolve_symbol(self.key.name))?;
         if !self.key.arguments.is_empty() {
@@ -55,7 +55,7 @@ impl<'a> std::fmt::Debug for KeyWithCompiler<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for KeyWithCompiler<'a> {
+impl std::fmt::Display for KeyWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
@@ -190,7 +190,7 @@ pub struct ExpressionWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Debug for ExpressionWithCompiler<'a> {
+impl std::fmt::Debug for ExpressionWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.expression {
             Expression::Variable { key, .. } => {
@@ -439,7 +439,7 @@ fn match_rule<'a>(
     state: &mut State<'a>,
     collection: &DefinitionMap<'a>,
     def_node: &'a Node<'a>,
-    arguments: &Vec<Value>,
+    arguments: &[Value],
 ) -> Option<(&'a Node<'a>, VarMap)> {
     let parameters = match &def_node.data {
         NodeData::Rule { parameters, .. }
@@ -587,15 +587,13 @@ fn resolve_definition<'a>(
 }
 
 fn is_variable_name(name: &str) -> bool {
-    return name
-        .chars()
-        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    name.chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
 fn is_rule_name(name: &str) -> bool {
-    return name
-        .chars()
-        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    name.chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 fn interpret_variable<'a>(

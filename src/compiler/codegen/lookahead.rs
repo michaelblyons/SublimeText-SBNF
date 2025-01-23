@@ -55,7 +55,7 @@ pub struct StackEntryWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Debug for StackEntryWithCompiler<'a> {
+impl std::fmt::Debug for StackEntryWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.entry.data {
             StackEntryData::Variable { key } => {
@@ -178,7 +178,7 @@ pub struct TerminalStackIteratorItem<'a, 'b> {
     pub remaining: &'b Vec<&'a Expression<'a>>,
 }
 
-impl<'a, 'b> TerminalStackIteratorItem<'a, 'b> {
+impl<'a> TerminalStackIteratorItem<'a, '_> {
     fn clone_stack_entry(&self) -> StackEntry<'a> {
         StackEntry {
             data: self.data.unwrap().clone(),
@@ -187,7 +187,7 @@ impl<'a, 'b> TerminalStackIteratorItem<'a, 'b> {
     }
 }
 
-impl<'a, 'b> PartialEq<StackEntry<'a>> for TerminalStackIteratorItem<'a, 'b> {
+impl<'a> PartialEq<StackEntry<'a>> for TerminalStackIteratorItem<'a, '_> {
     fn eq(&self, other: &StackEntry<'a>) -> bool {
         self.data.map_or(false, |d| *d == other.data)
             && *self.remaining == other.remaining
@@ -235,7 +235,7 @@ impl<'a, 'b> Iterator for TerminalStackIterator<'a, 'b> {
     }
 }
 
-impl<'a, 'b> DoubleEndedIterator for TerminalStackIterator<'a, 'b> {
+impl DoubleEndedIterator for TerminalStackIterator<'_, '_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self._is_empty() {
             return None;
@@ -246,7 +246,7 @@ impl<'a, 'b> DoubleEndedIterator for TerminalStackIterator<'a, 'b> {
     }
 }
 
-impl<'a, 'b> ExactSizeIterator for TerminalStackIterator<'a, 'b> {
+impl ExactSizeIterator for TerminalStackIterator<'_, '_> {
     fn len(&self) -> usize {
         self.size - self.index
     }
@@ -257,7 +257,7 @@ pub struct TerminalWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Debug for TerminalWithCompiler<'a> {
+impl std::fmt::Debug for TerminalWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,
@@ -376,7 +376,7 @@ pub struct LookaheadWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Debug for LookaheadWithCompiler<'a> {
+impl std::fmt::Debug for LookaheadWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(
             f,

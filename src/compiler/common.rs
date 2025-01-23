@@ -208,7 +208,7 @@ pub struct ValueWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Display for ValueWithCompiler<'a> {
+impl std::fmt::Display for ValueWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.value {
             Value::String { regex, literal, .. } => {
@@ -249,7 +249,7 @@ pub struct StackFrameWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Display for StackFrameWithCompiler<'a> {
+impl std::fmt::Display for StackFrameWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

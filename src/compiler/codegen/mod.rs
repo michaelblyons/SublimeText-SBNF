@@ -41,7 +41,7 @@ struct ContextKeyWithCompiler<'a> {
     compiler: &'a Compiler,
 }
 
-impl<'a> std::fmt::Debug for ContextKeyWithCompiler<'a> {
+impl std::fmt::Debug for ContextKeyWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{}:", self)?;
         for terminal in &self.key.lookahead.terminals {
@@ -51,7 +51,7 @@ impl<'a> std::fmt::Debug for ContextKeyWithCompiler<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for ContextKeyWithCompiler<'a> {
+impl std::fmt::Display for ContextKeyWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.key.rule_key.with_compiler(self.compiler))?;
         if let Some(branch_point) = &self.key.branch_point {
@@ -384,12 +384,12 @@ fn gen_contexts<'a>(
                     let is_last = i != num_terminals - 1;
                     let can_fail = is_last
                         && branch_point.as_ref().map_or(true, |bp| bp.can_fail);
-                    let branch_point_name =
-                        if !can_fail && branch_point.is_some() {
-                            branch_point.as_ref().unwrap().name.clone()
-                        } else {
-                            branch_point_name.clone()
-                        };
+                    let branch_point_name = match &branch_point {
+                        Some(branch_point) if !can_fail => {
+                            branch_point.name.clone()
+                        }
+                        _ => branch_point_name.clone(),
+                    };
 
                     // let branch_rule_key = branch_match.local_key(rule_key);
                     let branch_rule_key = terminal.local_key(rule_key);

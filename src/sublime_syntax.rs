@@ -404,7 +404,7 @@ impl Match {
 fn write_captures(
     state: &mut SerializeState,
     name: &str,
-    captures: &Vec<Scope>,
+    captures: &[Scope],
 ) -> Result<(), Error> {
     if !captures.is_empty() {
         serializeln!(state, "{}:", name)?;
@@ -421,7 +421,7 @@ fn write_captures(
 
 fn write_context_list(
     state: &mut SerializeState,
-    list: &Vec<String>,
+    list: &[String],
 ) -> Result<(), Error> {
     if list.len() == 1 {
         writeln!(&mut state.output, "{}", list[0])

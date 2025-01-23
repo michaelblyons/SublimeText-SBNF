@@ -331,33 +331,31 @@ fn collect_definitions<'a, 'b>(
 }
 
 fn is_valid_variable_name(name: &str) -> bool {
-    return name.chars().all(|c| {
+    name.chars().all(|c| {
         c.is_ascii_uppercase()
             || c.is_ascii_digit()
             || c == '_'
             || !c.is_ascii()
-    });
+    })
 }
 
 fn to_variable_name(name: &str) -> String {
-    return name
-        .chars()
+    name.chars()
         .map(|c| if c == '-' { '_' } else { c.to_ascii_uppercase() })
-        .collect::<String>();
+        .collect::<String>()
 }
 
 fn is_valid_rule_name(name: &str) -> bool {
-    return name.chars().all(|c| {
+    name.chars().all(|c| {
         c.is_ascii_lowercase()
             || c.is_ascii_digit()
             || c == '-'
             || !c.is_ascii()
-    });
+    })
 }
 
 fn to_rule_name(name: &str) -> String {
-    return name
-        .chars()
+    name.chars()
         .map(|c| if c == '_' { '-' } else { c.to_ascii_lowercase() })
-        .collect::<String>();
+        .collect::<String>()
 }
