@@ -252,7 +252,7 @@ impl TextLocation {
     pub fn with_source<'a>(
         &'a self,
         source: &'a str,
-    ) -> TextLocationWithSource {
+    ) -> TextLocationWithSource<'a> {
         TextLocationWithSource { loc: *self, source }
     }
 }
@@ -312,7 +312,7 @@ impl ParseError {
         &'a self,
         origin: &'a str,
         source: &'a str,
-    ) -> ParseErrorWithSource {
+    ) -> ParseErrorWithSource<'a> {
         ParseErrorWithSource { error: self, origin, source }
     }
 }

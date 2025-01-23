@@ -31,7 +31,7 @@ impl<'a> ContextKey<'a> {
     fn with_compiler(
         &'a self,
         compiler: &'a Compiler,
-    ) -> ContextKeyWithCompiler {
+    ) -> ContextKeyWithCompiler<'a> {
         ContextKeyWithCompiler { key: self, compiler }
     }
 }

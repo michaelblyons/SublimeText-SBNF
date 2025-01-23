@@ -45,7 +45,7 @@ impl<'a> StackEntry<'a> {
     pub fn with_compiler(
         &'a self,
         compiler: &'a Compiler,
-    ) -> StackEntryWithCompiler {
+    ) -> StackEntryWithCompiler<'a> {
         StackEntryWithCompiler { entry: self, compiler }
     }
 }
@@ -90,7 +90,7 @@ pub struct Terminal<'a> {
 }
 
 impl<'a> Terminal<'a> {
-    fn new(regex: Symbol, options: Option<&'a TerminalOptions>) -> Terminal {
+    fn new(regex: Symbol, options: Option<&'a TerminalOptions>) -> Self {
         Terminal { regex, options, remaining: vec![], stack: vec![] }
     }
 

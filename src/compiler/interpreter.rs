@@ -27,7 +27,7 @@ impl Key {
     pub fn with_compiler<'a>(
         &'a self,
         compiler: &'a Compiler,
-    ) -> KeyWithCompiler {
+    ) -> KeyWithCompiler<'a> {
         KeyWithCompiler { key: self, compiler }
     }
 }
@@ -180,7 +180,7 @@ impl<'a> Expression<'a> {
     pub fn with_compiler(
         &'a self,
         compiler: &'a Compiler,
-    ) -> ExpressionWithCompiler {
+    ) -> ExpressionWithCompiler<'a> {
         ExpressionWithCompiler { expression: self, compiler }
     }
 }

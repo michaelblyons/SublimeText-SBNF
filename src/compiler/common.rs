@@ -101,7 +101,7 @@ impl Error {
         error_type: &'a str,
         origin: &'a str,
         source: &'a str,
-    ) -> ErrorWithCompilerAndSource {
+    ) -> ErrorWithCompilerAndSource<'a> {
         ErrorWithCompilerAndSource {
             error: self,
             compiler,
@@ -198,7 +198,7 @@ impl Value {
     pub fn with_compiler<'a>(
         &'a self,
         compiler: &'a Compiler,
-    ) -> ValueWithCompiler {
+    ) -> ValueWithCompiler<'a> {
         ValueWithCompiler { value: self, compiler }
     }
 }
@@ -239,7 +239,7 @@ impl StackFrame {
     pub fn with_compiler<'a>(
         &'a self,
         compiler: &'a Compiler,
-    ) -> StackFrameWithCompiler {
+    ) -> StackFrameWithCompiler<'a> {
         StackFrameWithCompiler { stack_frame: self, compiler }
     }
 }
