@@ -20,7 +20,7 @@ struct BranchPoint {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ContextKey<'a> {
-    rule_key: &'a Key,
+    rule_key: Key,
     is_top_level: bool,
     lookahead: Lookahead<'a>,
     branch_point: Option<BranchPoint>,
@@ -73,7 +73,7 @@ struct Rule {
 
 struct State<'a> {
     compiler: &'a Compiler,
-    rules: HashMap<&'a Key, Rule>,
+    rules: HashMap<Key, Rule>,
     context_queue: Vec<(String, ContextKey<'a>)>,
     context_cache: HashMap<ContextKey<'a>, String>,
     include_context_cache: HashMap<ContextKey<'a>, String>,
@@ -96,7 +96,7 @@ pub fn codegen(
     };
 
     for rule_key in &interpreted.entry_points {
-        gen_rule(&mut state, &interpreted, rule_key);
+        gen_rule(&mut state, &interpreted, *rule_key);
     }
 
     while let Some(item) = state.context_queue.pop() {
@@ -117,9 +117,9 @@ pub fn codegen(
 fn lookahead_rule<'a>(
     state: &State<'a>,
     interpreted: &'a Interpreted,
-    rule_key: &'a Key,
+    rule_key: Key,
 ) -> lookahead::Lookahead<'a> {
-    let rule = &interpreted.rules[rule_key];
+    let rule = &interpreted.rules[&rule_key];
 
     let mut lookahead_state = lookahead::LookaheadState::new(state.compiler);
     lookahead_state.push_variable(rule_key);
@@ -138,7 +138,7 @@ fn lookahead_rule<'a>(
 fn gen_rule<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
-    rule_key: &'a Key,
+    rule_key: Key,
 ) {
     let lookahead = lookahead_rule(state, interpreted, rule_key);
 
@@ -149,7 +149,7 @@ fn gen_rule<'a>(
         branch_point: None,
     };
 
-    let name = state.compiler.resolve_symbol(rule_key.name).to_string();
+    let name = rule_key.get_name(state.compiler).to_string();
 
     let old_entry =
         state.context_cache.insert(context_key.clone(), name.clone());
@@ -222,7 +222,7 @@ fn gen_contexts<'a>(
         let capture: bool = false;
         {
             // Branch points have an "invalid" rule at the top of the stack
-            let rule = interpreted.rules.get(rule_key).unwrap();
+            let rule = interpreted.rules.get(&rule_key).unwrap();
 
             meta_content_scope = if branch_point.is_none() && is_top_level {
                 rule.options.scope.clone()
@@ -584,7 +584,7 @@ fn gen_contexts<'a>(
 fn gen_end_match<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
-    rule_key: &'a Key,
+    rule_key: Key,
     is_top_level: bool,
     branch_point: &Option<BranchPoint>,
     lookahead: &Lookahead<'a>,
@@ -656,7 +656,7 @@ fn gen_terminal<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
     context_name: &str,
-    rule_key: &'a Key,
+    rule_key: Key,
     meta_content_scope: &sublime_syntax::Scope,
     branch_point: &Option<BranchPoint>,
     mut scope: sublime_syntax::Scope,
@@ -724,10 +724,10 @@ fn gen_terminal<'a>(
         TerminalEmbed::Include { context: path, prototype } => {
             // Generate the prototype context
             let prototype_context = {
-                let lookahead = lookahead_rule(state, interpreted, prototype);
+                let lookahead = lookahead_rule(state, interpreted, *prototype);
 
                 let prototype_key = ContextKey {
-                    rule_key: prototype,
+                    rule_key: *prototype,
                     is_top_level: true,
                     lookahead: lookahead.clone(),
                     branch_point: None,
@@ -835,7 +835,7 @@ fn gen_simple_match<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
     context_name: &str,
-    rule_key: &'a Key,
+    rule_key: Key,
     is_top_level: bool,
     meta_content_scope: &sublime_syntax::Scope,
     branch_point: &Option<BranchPoint>,
@@ -960,7 +960,7 @@ fn gen_simple_match<'a>(
 fn gen_simple_match_contexts<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
-    mut rule_key: &'a Key,
+    mut rule_key: Key,
     mut is_top_level: bool,
     remaining: &[&'a Expression],
     stack: &[StackEntry<'a>],
@@ -1018,7 +1018,7 @@ fn gen_simple_match_contexts<'a>(
         }
 
         if let StackEntryData::Variable { key } = &entry.data {
-            rule_key = key;
+            rule_key = *key;
 
             let rem = if i > 0 { &stack[i - 1].remaining } else { remaining };
             if rem.is_empty() && (i != 0 || !remaining.is_empty()) {
@@ -1070,9 +1070,9 @@ fn gen_simple_match_contexts<'a>(
 fn gen_meta_content_scope_context<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
-    rule_key: &'a Key,
+    rule_key: Key,
 ) -> Option<String> {
-    let meta_content_scope = interpreted.rules[rule_key].options.scope.clone();
+    let meta_content_scope = interpreted.rules[&rule_key].options.scope.clone();
 
     if !meta_content_scope.is_empty() {
         let mut rule_meta_ctx_name = build_rule_key_name(state, rule_key);
@@ -1109,16 +1109,16 @@ fn gen_meta_content_scope_context<'a>(
     }
 }
 
-fn gen_entry_context<'a>(
-    state: &mut State<'a>,
-    rule_key: &'a Key,
+fn gen_entry_context(
+    state: &mut State<'_>,
+    rule_key: Key,
     contexts: Vec<String>,
 ) -> String {
     if let Some(context) = state.entry_contexts.get(&contexts) {
         return context.clone();
     }
 
-    let index = if let Some(rule) = state.rules.get_mut(rule_key) {
+    let index = if let Some(rule) = state.rules.get_mut(&rule_key) {
         let i = rule.entry_context_count;
         rule.entry_context_count += 1;
         i
@@ -1168,9 +1168,9 @@ fn gen_simple_match_remaining_context<'a>(
     state: &mut State<'a>,
     interpreted: &'a Interpreted,
     mut is_top_level: bool,
-    mut rule_key: &'a Key,
+    mut rule_key: Key,
     mut lookahead: Lookahead<'a>,
-) -> (Vec<String>, Option<&'a Key>) {
+) -> (Vec<String>, Option<Key>) {
     // We can end up in situations where we have a context/rule_key that has
     // redundant variables, ie. every match stack has the same variable at the
     // end. Using a similar algorithm to gen_simple_match_contexts we can
@@ -1191,16 +1191,16 @@ fn gen_simple_match_remaining_context<'a>(
             break;
         }
 
-        let next_rule_key: &'a Key = match &sample.data {
-            StackEntryData::Variable { key } => key,
+        let next_rule_key: Key = match &sample.data {
+            StackEntryData::Variable { key } => *key,
             _ => break,
         };
 
         let all_match = lookahead.terminals[1..].iter().all(|term| {
             let last = term.stack.last().unwrap();
 
-            let key: &'a Key = match &last.data {
-                StackEntryData::Variable { key } => key,
+            let key: Key = match &last.data {
+                StackEntryData::Variable { key } => *key,
                 _ => return false,
             };
 
@@ -1242,7 +1242,7 @@ fn gen_simple_match_remaining_context<'a>(
     }
 
     let key = if contexts.len() > 1
-        || !interpreted.rules[rule_key].options.scope.is_empty()
+        || !interpreted.rules[&rule_key].options.scope.is_empty()
     {
         Some(rule_key)
     } else {
@@ -1252,41 +1252,34 @@ fn gen_simple_match_remaining_context<'a>(
     (contexts, key)
 }
 
-fn build_rule_key_name(state: &State, rule_key: &Key) -> String {
-    let mut result = state.compiler.resolve_symbol(rule_key.name).to_string();
+fn build_rule_key_name(state: &State, rule_key: Key) -> String {
+    let mut result = rule_key.get_name(state.compiler).to_string();
 
     // Encode arguments
-    if !rule_key.arguments.is_empty() {
+    if let Some(arguments) = rule_key.get_arguments(state.compiler) {
         result.push('@');
 
         // Arguments can be in any format, so convert them to a string
         // representation first and then base-64 encode them to make them safe
         // to use in a context name.
-        let mut s =
-            format!("[{}", rule_key.arguments[0].with_compiler(state.compiler));
-        for arg in &rule_key.arguments[1..] {
-            write!(s, ", {}", arg.with_compiler(state.compiler)).unwrap();
-        }
-        s.push(']');
-
         use base64::Engine;
         base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode_string(s.as_bytes(), &mut result);
+            .encode_string(arguments.as_bytes(), &mut result);
     }
 
     result
 }
 
 // Generate an uncached unique name for a context key
-fn create_uncached_context_name<'a>(
-    state: &mut State<'a>,
-    rule_key: &'a Key,
+fn create_uncached_context_name(
+    state: &mut State<'_>,
+    rule_key: Key,
     branch_point: &Option<BranchPoint>,
 ) -> String {
     let mut result = build_rule_key_name(state, rule_key);
 
     // Add inner context count to prevent context name collisions in inner contexts
-    let index = if let Some(rule) = state.rules.get_mut(rule_key) {
+    let index = if let Some(rule) = state.rules.get_mut(&rule_key) {
         let i = rule.context_count;
         rule.context_count += 1;
         i
@@ -1327,8 +1320,8 @@ fn create_context_name<'a>(
 }
 
 // Generate a new branch point for a rule
-fn create_branch_point_name<'a>(state: &mut State<'a>, key: &'a Key) -> String {
-    let index = if let Some(rule) = state.rules.get_mut(key) {
+fn create_branch_point_name(state: &mut State, key: Key) -> String {
+    let index = if let Some(rule) = state.rules.get_mut(&key) {
         rule.branch_point_count += 1;
         rule.branch_point_count
     } else {
@@ -1343,7 +1336,7 @@ fn create_branch_point_name<'a>(state: &mut State<'a>, key: &'a Key) -> String {
         1
     };
 
-    format!("{}@{}", state.compiler.resolve_symbol(key.name), index)
+    format!("{}@{}", key.get_name(state.compiler), index)
 }
 
 fn create_branch_point_include_context_name(branch_point: &str) -> String {
@@ -1352,18 +1345,18 @@ fn create_branch_point_include_context_name(branch_point: &str) -> String {
 
 fn scope_for_match_stack<'a>(
     interpreted: &'a Interpreted,
-    rule_key: Option<&'a Key>,
+    rule_key: Option<Key>,
     terminal: &Terminal<'a>,
 ) -> sublime_syntax::Scope {
     let mut scope = sublime_syntax::Scope::empty();
 
     if let Some(rule_key) = rule_key {
-        scope = interpreted.rules[rule_key].options.scope.clone();
+        scope = interpreted.rules[&rule_key].options.scope.clone();
     }
 
     for entry in terminal.stack.iter().rev() {
         if let StackEntryData::Variable { key } = &entry.data {
-            let rule_options = &interpreted.rules[*key].options;
+            let rule_options = &interpreted.rules[key].options;
 
             scope.extend(&rule_options.scope);
         }

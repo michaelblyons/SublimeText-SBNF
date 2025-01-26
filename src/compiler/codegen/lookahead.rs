@@ -31,7 +31,7 @@ use hashbrown::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StackEntryData<'a> {
-    Variable { key: &'a Key },
+    Variable { key: Key },
     Repetition { expression: &'a Expression<'a> },
 }
 
@@ -117,10 +117,10 @@ impl<'a> Terminal<'a> {
         }
     }
 
-    pub fn local_key(&self, topmost: &'a Key) -> &'a Key {
+    pub fn local_key(&self, topmost: Key) -> Key {
         for entry in &self.stack {
             if let StackEntryData::Variable { key } = &entry.data {
-                return key;
+                return *key;
             }
         }
 
@@ -391,7 +391,7 @@ impl std::fmt::Debug for LookaheadWithCompiler<'_> {
 }
 
 pub struct LookaheadState<'a> {
-    visited_variables: HashMap<&'a Key, bool>,
+    visited_variables: HashMap<Key, bool>,
     pub compiler: &'a Compiler,
 }
 
@@ -400,14 +400,14 @@ impl<'a> LookaheadState<'a> {
         LookaheadState { visited_variables: HashMap::new(), compiler }
     }
 
-    pub fn push_variable(&mut self, key: &'a Key) -> Option<Lookahead<'a>> {
+    pub fn push_variable(&mut self, key: Key) -> Option<Lookahead<'a>> {
         // If we're already in the stack of variables then we've got left recursion
-        if let Some(left_recursion) = self.visited_variables.get_mut(key) {
+        if let Some(left_recursion) = self.visited_variables.get_mut(&key) {
             *left_recursion = true;
 
             // Create a sentinel terminal with no terminal options
             Some(Lookahead {
-                terminals: vec![Terminal::new(key.name, None)],
+                terminals: vec![Terminal::new(key.as_symbol(), None)],
                 end: End::Illegal,
                 empty: false,
             })
@@ -417,9 +417,9 @@ impl<'a> LookaheadState<'a> {
         }
     }
 
-    pub fn pop_variable(&mut self, key: &Key, lookahead: &mut Lookahead<'a>) {
+    pub fn pop_variable(&mut self, key: Key, lookahead: &mut Lookahead<'a>) {
         // Check if we have left recursion
-        if self.visited_variables.remove(key).unwrap() {
+        if self.visited_variables.remove(&key).unwrap() {
             // Extract terminals that follow a left recursion
             let left_recursion_terminals = {
                 let mut result = vec![];
@@ -494,7 +494,7 @@ pub fn lookahead<'a>(
 ) -> Lookahead<'a> {
     match expression {
         Expression::Variable { key, .. } => {
-            if let Some(lookahead) = state.push_variable(key) {
+            if let Some(lookahead) = state.push_variable(*key) {
                 return lookahead;
             }
 
@@ -502,12 +502,12 @@ pub fn lookahead<'a>(
 
             let mut la = lookahead(interpreted, rule.expression, state);
 
-            state.pop_variable(key, &mut la);
+            state.pop_variable(*key, &mut la);
 
             // Add the variable to the stacks
             for term in &mut la.terminals {
                 term.stack.push(StackEntry {
-                    data: StackEntryData::Variable { key },
+                    data: StackEntryData::Variable { key: *key },
                     remaining: vec![],
                 });
             }
@@ -729,19 +729,16 @@ mod tests {
 
             let interpreted = interpreter_result.result.as_ref().unwrap();
 
-            let key = interpreter::Key {
-                name: self.symbol(rule_name),
-                arguments: vec![],
-            };
+            let key = interpreter::Key::basic(self.symbol(rule_name));
             let rule = &interpreted.rules[&key];
 
             let mut lookahead_state = LookaheadState::new(&self.compiler);
-            assert!(lookahead_state.push_variable(&key).is_none());
+            assert!(lookahead_state.push_variable(key).is_none());
 
             let mut la =
                 lookahead(interpreted, rule.expression, &mut lookahead_state);
 
-            lookahead_state.pop_variable(&key, &mut la);
+            lookahead_state.pop_variable(key, &mut la);
 
             println!("{:?}", la.with_compiler(&self.compiler));
             fun(la, &self.compiler);
@@ -752,7 +749,7 @@ mod tests {
         StackEntryData::Repetition { expression }
     }
 
-    fn sed_var(key: &Key) -> StackEntryData<'_> {
+    fn sed_var<'a>(key: Key) -> StackEntryData<'a> {
         StackEntryData::Variable { key }
     }
 
@@ -1116,7 +1113,7 @@ mod tests {
         let sym_a = harness.symbol("a");
         let sym_b = harness.symbol("b");
         let sym_c = harness.symbol("c");
-        let r_key = Key { name: harness.symbol("r"), arguments: vec![] };
+        let r_key = Key::basic(harness.symbol("r"));
 
         harness.lookahead("m : 'a' 'b';", "m", |lookahead, _c| {
             assert_matches!(lookahead.end, End::Illegal);
@@ -1205,7 +1202,7 @@ mod tests {
                 assert_eq!(term0.regex, sym_a);
                 assert_eq!(term0.remaining.len(), 2);
                 assert_eq!(term0.stack.len(), 1);
-                assert_eq!(term0.stack[0].data, sed_var(&r_key));
+                assert_eq!(term0.stack[0].data, sed_var(r_key));
                 assert_eq!(term0.stack[0].remaining.len(), 1);
                 assert_eq!(term0.stack[0].remaining[0], &expr_trm_noopt(sym_b));
                 let term1 = &lookahead.terminals[1];
@@ -1222,8 +1219,8 @@ mod tests {
         let sym_a = harness.symbol("a");
         let sym_b = harness.symbol("b");
         let sym_c = harness.symbol("c");
-        let m_key = Key { name: harness.symbol("m"), arguments: vec![] };
-        let r_key = Key { name: harness.symbol("r"), arguments: vec![] };
+        let m_key = Key::basic(harness.symbol("m"));
+        let r_key = Key::basic(harness.symbol("r"));
 
         harness.lookahead("m : m ;", "m", |lookahead, _c| {
             assert_matches!(lookahead.end, End::Illegal);
@@ -1270,7 +1267,7 @@ mod tests {
             assert_eq!(term0.regex, sym_a);
             assert_eq!(term0.remaining.len(), 0);
             assert_eq!(term0.stack.len(), 1);
-            assert_eq!(term0.stack[0].data, sed_var(&r_key));
+            assert_eq!(term0.stack[0].data, sed_var(r_key));
             assert_eq!(term0.stack[0].remaining.len(), 1);
             assert_eq!(term0.stack[0].remaining[0], &expr_var(m_key.clone()));
         });

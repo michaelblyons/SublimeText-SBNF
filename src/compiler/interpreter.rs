@@ -17,40 +17,46 @@ pub struct Interpreted<'a> {
     pub metadata: Metadata,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Key {
-    pub name: Symbol,
-    pub arguments: Vec<Value>,
-}
+// Key uniquely identifying a instantiated rule. This uses a symbol created
+// using name-mangling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Key(Symbol);
 
 impl Key {
+    pub fn basic(sym: Symbol) -> Key {
+        Key(sym)
+    }
+
     pub fn with_compiler<'a>(
         &'a self,
         compiler: &'a Compiler,
     ) -> KeyWithCompiler<'a> {
-        KeyWithCompiler { key: self, compiler }
+        KeyWithCompiler { key: *self, compiler }
+    }
+
+    pub fn as_symbol(&self) -> Symbol {
+        self.0
+    }
+
+    pub fn get_name<'a>(&self, compiler: &'a Compiler) -> &'a str {
+        let symbol = compiler.resolve_symbol(self.0);
+        symbol.split_once('[').map(|(name, _)| name).unwrap_or(symbol)
+    }
+
+    pub fn get_arguments<'a>(&self, compiler: &'a Compiler) -> Option<&'a str> {
+        let symbol = compiler.resolve_symbol(self.0);
+        symbol.split_once('[').map(|(_, args)| args)
     }
 }
 
 pub struct KeyWithCompiler<'a> {
-    key: &'a Key,
+    key: Key,
     compiler: &'a Compiler,
 }
 
 impl std::fmt::Debug for KeyWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.compiler.resolve_symbol(self.key.name))?;
-        if !self.key.arguments.is_empty() {
-            write!(
-                f,
-                "[{}",
-                self.key.arguments[0].with_compiler(self.compiler)
-            )?;
-            for arg in &self.key.arguments[1..] {
-                write!(f, ", {}", arg.with_compiler(self.compiler))?;
-            }
-            write!(f, "]")?;
-        }
+        write!(f, "{}", self.compiler.resolve_symbol(self.key.0))?;
         Ok(())
     }
 }
@@ -58,6 +64,30 @@ impl std::fmt::Debug for KeyWithCompiler<'_> {
 impl std::fmt::Display for KeyWithCompiler<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct RawKey {
+    name: Symbol,
+    arguments: Vec<Value>,
+}
+
+impl RawKey {
+    fn mangle(&self, compiler: &Compiler) -> Key {
+        let mut buf = compiler.resolve_symbol(self.name).to_string();
+
+        if !self.arguments.is_empty() {
+            write!(buf, "[{}", self.arguments[0].with_compiler(compiler))
+                .unwrap();
+
+            for arg in &self.arguments[1..] {
+                write!(buf, ", {}", arg.with_compiler(compiler)).unwrap();
+            }
+            buf.push(']');
+        }
+
+        Key(compiler.get_symbol(&buf))
     }
 }
 
@@ -275,7 +305,7 @@ pub fn interpret<'a>(
     };
 
     for (name, value) in collection.variables {
-        state.variables.insert(Key { name, arguments: vec![] }, Some(value));
+        state.variables.insert(Key::basic(name), Some(value));
     }
 
     let definitions = &collection.definitions;
@@ -291,12 +321,12 @@ pub fn interpret<'a>(
         for entry_point in &options.entry_points {
             let name = state.compiler.get_symbol(entry_point);
             if meta_state.collection.get_key_value(&(name, 0)).is_some() {
-                let key = Key { name, arguments: vec![] };
+                let key = RawKey { name, arguments: vec![] };
 
                 assert!(state.stack.is_empty());
                 interpret_rule(&mut state, &meta_state, None, &key);
 
-                entry_points.push(key);
+                entry_points.push(key.mangle(compiler));
             }
         }
     }
@@ -403,7 +433,7 @@ fn interpret_metadata_variable<'a>(
 
         let overloads = &definition.overloads;
 
-        let key = Key { name: symbol, arguments: vec![] };
+        let key = RawKey { name: symbol, arguments: vec![] };
 
         let value = interpret_variable(state, collection, None, key);
 
@@ -487,7 +517,7 @@ fn resolve_definition<'a>(
     state: &mut State<'a>,
     collection: &DefinitionMap<'a>,
     reference_loc: Option<TextLocation>,
-    key: &Key,
+    key: &RawKey,
 ) -> Option<(DefinitionKind, &'a Node<'a>, VarMap)> {
     if let Some(Definition { kind, overloads }) =
         collection.get(&(key.name, key.arguments.len() as u8))
@@ -517,7 +547,8 @@ fn resolve_definition<'a>(
                     Error::new(
                         format!(
                             "Ambiguous instantiation for {}",
-                            key.with_compiler(state.compiler)
+                            key.mangle(state.compiler)
+                                .with_compiler(state.compiler)
                         ),
                         Some(node.location),
                         comments,
@@ -540,7 +571,8 @@ fn resolve_definition<'a>(
                 Error::new(
                     format!(
                         "No matching instantiation for {}",
-                        key.with_compiler(state.compiler)
+                        key.mangle(state.compiler)
+                            .with_compiler(state.compiler)
                     ),
                     reference_loc.or(Some(overloads[0].location)),
                     comments,
@@ -600,14 +632,16 @@ fn interpret_variable<'a>(
     state: &mut State<'a>,
     collection: &DefinitionMap<'a>,
     reference_loc: Option<TextLocation>,
-    key: Key,
+    raw_key: RawKey,
 ) -> Option<Value> {
+    let key = raw_key.mangle(state.compiler);
+
     if state.variables.contains_key(&key) {
         return state.variables[&key].clone();
     }
 
     if let Some((kind, node, var_map)) =
-        resolve_definition(state, collection, reference_loc, &key)
+        resolve_definition(state, collection, reference_loc, &raw_key)
     {
         assert!(kind == DefinitionKind::Variable);
 
@@ -617,7 +651,7 @@ fn interpret_variable<'a>(
                 Error::new(
                     format!(
                         "Variable {} is defined in terms of itself",
-                        state.compiler.resolve_symbol(key.name)
+                        state.compiler.resolve_symbol(raw_key.name)
                     ),
                     Some(node.location),
                     vec![],
@@ -627,7 +661,7 @@ fn interpret_variable<'a>(
             return None;
         }
 
-        let is_new_key = state.seen_definitions.insert(key.clone());
+        let is_new_key = state.seen_definitions.insert(key);
         assert!(is_new_key);
 
         let symbol = state.compiler.get_symbol(node.text);
@@ -636,7 +670,7 @@ fn interpret_variable<'a>(
             reference_loc,
             symbol,
             node.location,
-            key.arguments.clone(),
+            raw_key.arguments.clone(),
         ) {
             state.errors.push(
                 Error::from_str(
@@ -670,19 +704,21 @@ fn interpret_rule<'a>(
     state: &mut State<'a>,
     meta_state: &MetaState<'a, '_>,
     reference_loc: Option<TextLocation>,
-    key: &Key,
+    raw_key: &RawKey,
 ) {
+    let key = raw_key.mangle(state.compiler);
+
     // Nothing to do if the key has been seen before
-    if state.seen_definitions.contains(key) {
+    if state.seen_definitions.contains(&key) {
         return;
     }
 
     if let Some((kind, node, var_map)) =
-        resolve_definition(state, meta_state.collection, reference_loc, key)
+        resolve_definition(state, meta_state.collection, reference_loc, raw_key)
     {
         assert!(kind == DefinitionKind::Rule);
 
-        let is_new_key = state.seen_definitions.insert(key.clone());
+        let is_new_key = state.seen_definitions.insert(key);
         assert!(is_new_key);
 
         let (expression_node, options_node) =
@@ -698,7 +734,7 @@ fn interpret_rule<'a>(
             reference_loc,
             symbol,
             node.location,
-            key.arguments.clone(),
+            raw_key.arguments.clone(),
         ) {
             state.errors.push(
                 Error::from_str(
@@ -715,7 +751,7 @@ fn interpret_rule<'a>(
             state,
             meta_state,
             &var_map,
-            key.name,
+            raw_key.name,
             options_node.as_ref().map(|o| o.as_ref()),
         );
 
@@ -726,7 +762,7 @@ fn interpret_rule<'a>(
             let expression = state.compiler.allocator.alloc(expression);
 
             let is_new_rule =
-                state.rules.insert(key.clone(), Rule { options, expression });
+                state.rules.insert(key, Rule { options, expression });
             assert!(is_new_rule.is_none());
         }
 
@@ -812,7 +848,7 @@ fn interpret_value<'a>(
                 return None;
             }
 
-            let key = Key { name, arguments };
+            let key = RawKey { name, arguments };
 
             if let Some((kind, ref_node, _)) =
                 resolve_definition(state, collection, Some(node.location), &key)
@@ -875,14 +911,17 @@ fn interpret_expression<'a>(
                 Some(Value::Rule { name, arguments, .. }) => {
                     assert!(node_options.is_none());
 
-                    let key = Key { name, arguments };
+                    let key = RawKey { name, arguments };
                     interpret_rule(
                         state,
                         meta_state,
                         Some(node.location),
                         &key,
                     );
-                    Some(Expression::Variable { key, location: node.location })
+                    Some(Expression::Variable {
+                        key: key.mangle(state.compiler),
+                        location: node.location,
+                    })
                 }
                 None => None,
             }
@@ -1460,7 +1499,7 @@ fn parse_terminal_embed<'a>(
                 return TerminalEmbed::None;
             }
             Some(Value::Rule { name, arguments, .. }) => {
-                let key = Key { name, arguments };
+                let key = RawKey { name, arguments };
                 interpret_rule(
                     state,
                     meta_state,
@@ -1517,7 +1556,10 @@ fn parse_terminal_embed<'a>(
             _ => panic!(),
         };
 
-        TerminalEmbed::Include { context, prototype }
+        TerminalEmbed::Include {
+            context,
+            prototype: prototype.mangle(state.compiler),
+        }
     } else {
         state.errors.push(
             Error::from_str(
@@ -1624,7 +1666,7 @@ fn interpolate_string<'a>(
                     let value = if let Some(value) = var_map.get(&name) {
                         Some(value.clone())
                     } else {
-                        let key = Key { name, arguments: vec![] };
+                        let key = RawKey { name, arguments: vec![] };
 
                         if let Some((kind, ref_node, _)) = resolve_definition(
                             state,
