@@ -84,7 +84,7 @@ impl std::fmt::Debug for StackEntryWithCompiler<'_> {
 pub struct Terminal<'a> {
     pub regex: Symbol,
     // Only None for sentinel terminals used to track left recursion
-    pub options: Option<&'a TerminalOptions>,
+    pub options: Option<&'a TerminalOptions<'a>>,
     pub remaining: Vec<&'a Expression<'a>>,
     pub stack: Vec<StackEntry<'a>>,
 }
@@ -488,7 +488,7 @@ impl<'a> LookaheadState<'a> {
 
 // Transform and collect matches that the context for the expression needs to match
 pub fn lookahead<'a>(
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     expression: &'a Expression,
     state: &mut LookaheadState<'a>,
 ) -> Lookahead<'a> {
@@ -578,7 +578,7 @@ pub fn lookahead<'a>(
 // A concatenation of contexts is the first context that can't be empty, with
 // those before being alternations
 pub fn lookahead_concatenation<'a, I>(
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     mut expressions: I,
     state: &mut LookaheadState<'a>,
 ) -> Lookahead<'a>
@@ -616,7 +616,7 @@ where
 
 // Collect the next context following the context stack
 pub fn advance_terminal<'a>(
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     terminal: &Terminal<'a>,
     compiler: &'a Compiler,
 ) -> Option<Lookahead<'a>> {
@@ -708,7 +708,8 @@ mod tests {
         where
             F: Fn(Lookahead, &Compiler),
         {
-            let grammar = sbnf::parse(source).unwrap();
+            let grammar =
+                sbnf::parse(source, &self.compiler.allocator).unwrap();
 
             let options = CompileOptions {
                 name_hint: Some("test"),

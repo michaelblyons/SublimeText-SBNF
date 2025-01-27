@@ -13,8 +13,8 @@ pub mod lookahead;
 use lookahead::{Lookahead, StackEntry, StackEntryData, Terminal};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct BranchPoint {
-    name: String,
+struct BranchPoint<'a> {
+    name: &'a str,
     can_fail: bool,
 }
 
@@ -23,7 +23,7 @@ struct ContextKey<'a> {
     rule_key: Key,
     is_top_level: bool,
     lookahead: Lookahead<'a>,
-    branch_point: Option<BranchPoint>,
+    branch_point: Option<BranchPoint<'a>>,
 }
 
 impl<'a> ContextKey<'a> {
@@ -74,17 +74,17 @@ struct Rule {
 struct State<'a> {
     compiler: &'a Compiler,
     rules: HashMap<Key, Rule>,
-    context_queue: Vec<(String, ContextKey<'a>)>,
-    context_cache: HashMap<ContextKey<'a>, String>,
-    include_context_cache: HashMap<ContextKey<'a>, String>,
-    entry_contexts: HashMap<Vec<String>, String>,
-    contexts: HashMap<String, sublime_syntax::Context>,
+    context_queue: Vec<ContextKey<'a>>,
+    context_cache: HashMap<ContextKey<'a>, &'a str>,
+    include_context_cache: HashMap<ContextKey<'a>, &'a str>,
+    entry_contexts: HashMap<&'a [&'a str], &'a str>,
+    contexts: HashMap<&'a str, sublime_syntax::Context<'a>>,
 }
 
-pub fn codegen(
-    compiler: &Compiler,
-    interpreted: Interpreted,
-) -> sublime_syntax::Syntax {
+pub fn codegen<'a>(
+    compiler: &'a Compiler,
+    interpreted: Interpreted<'a>,
+) -> sublime_syntax::Syntax<'a> {
     let mut state = State {
         compiler,
         rules: HashMap::new(),
@@ -103,20 +103,23 @@ pub fn codegen(
         gen_contexts(&mut state, &interpreted, vec![item]);
     }
 
+    let contexts = compiler.allocator.alloc_slice_fill_iter(state.contexts);
+    contexts.sort_by_key(|v| v.0);
+
     sublime_syntax::Syntax {
-        name: interpreted.metadata.name.clone(),
-        file_extensions: interpreted.metadata.file_extensions.clone(),
+        name: interpreted.metadata.name,
+        file_extensions: interpreted.metadata.file_extensions,
         first_line_match: interpreted.metadata.first_line_match.clone(),
-        scope: interpreted.metadata.scope.clone(),
+        scope: interpreted.metadata.scope,
         hidden: interpreted.metadata.hidden,
-        variables: HashMap::new(),
-        contexts: state.contexts,
+        variables: &[],
+        contexts,
     }
 }
 
 fn lookahead_rule<'a>(
     state: &State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     rule_key: Key,
 ) -> lookahead::Lookahead<'a> {
     let rule = &interpreted.rules[&rule_key];
@@ -137,7 +140,7 @@ fn lookahead_rule<'a>(
 
 fn gen_rule<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     rule_key: Key,
 ) {
     let lookahead = lookahead_rule(state, interpreted, rule_key);
@@ -149,13 +152,12 @@ fn gen_rule<'a>(
         branch_point: None,
     };
 
-    let name = rule_key.get_name(state.compiler).to_string();
+    let name = rule_key.get_name(state.compiler);
 
-    let old_entry =
-        state.context_cache.insert(context_key.clone(), name.clone());
+    let old_entry = state.context_cache.insert(context_key.clone(), name);
     assert!(old_entry.is_none());
 
-    state.context_queue.push((name, context_key));
+    state.context_queue.push(context_key);
 }
 
 fn count_duplicate_regexes<'a, I>(iter: I) -> HashMap<Symbol, usize>
@@ -191,12 +193,12 @@ fn index_terminals(lookahead: &Lookahead<'_>) -> IndexMap<Symbol, Vec<usize>> {
 */
 fn gen_contexts<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
-    contexts: Vec<(String, ContextKey<'a>)>,
+    interpreted: &Interpreted<'a>,
+    contexts: Vec<ContextKey<'a>>,
 ) {
     assert!(!contexts.is_empty());
     if contexts.len() > 1 {
-        assert!(contexts.iter().all(|(_, c)| c.branch_point.is_some()));
+        assert!(contexts.iter().all(|c| c.branch_point.is_some()));
     }
 
     // println!("GEN CONTEXTS {}", contexts.len());
@@ -205,11 +207,13 @@ fn gen_contexts<'a>(
     // }
 
     let regexes =
-        count_duplicate_regexes(contexts.iter().map(|(_, c)| &c.lookahead));
+        count_duplicate_regexes(contexts.iter().map(|c| &c.lookahead));
 
-    let mut next_contexts: Vec<(String, ContextKey<'a>)> = vec![];
+    let mut next_contexts: Vec<ContextKey<'_>> = vec![];
 
-    for (name, context_key) in contexts {
+    for context_key in contexts {
+        let name = state.context_cache[&context_key];
+
         let mut patterns = vec![];
 
         let rule_key = context_key.rule_key;
@@ -225,9 +229,9 @@ fn gen_contexts<'a>(
             let rule = interpreted.rules.get(&rule_key).unwrap();
 
             meta_content_scope = if branch_point.is_none() && is_top_level {
-                rule.options.scope.clone()
+                rule.options.scope
             } else {
-                sublime_syntax::Scope::empty()
+                sublime_syntax::Scope::EMPTY
             };
 
             meta_include_prototype = rule.options.include_prototype;
@@ -243,6 +247,7 @@ fn gen_contexts<'a>(
                 // Continue branch
                 if continue_branch {
                     let scope = scope_for_match_stack(
+                        state,
                         interpreted,
                         Some(rule_key),
                         terminal,
@@ -264,15 +269,16 @@ fn gen_contexts<'a>(
                         let name = if let Some(entry) =
                             state.context_cache.get(&next_key)
                         {
-                            entry.clone()
+                            entry
                         } else {
                             let name =
                                 create_context_name(state, next_key.clone());
 
-                            next_contexts.push((name.clone(), next_key));
+                            next_contexts.push(next_key);
                             name
                         };
-                        sublime_syntax::ContextChange::Push(vec![name])
+
+                        sublime_syntax::ContextChange::PushOne(name)
                     } else {
                         sublime_syntax::ContextChange::None
                     };
@@ -280,7 +286,7 @@ fn gen_contexts<'a>(
                     patterns.push(gen_terminal(
                         state,
                         interpreted,
-                        &name,
+                        name,
                         rule_key,
                         &meta_content_scope,
                         &branch_point,
@@ -291,6 +297,7 @@ fn gen_contexts<'a>(
                     ));
                 } else {
                     let scope = scope_for_match_stack(
+                        state,
                         interpreted,
                         if branch_point.is_some() {
                             Some(rule_key)
@@ -303,7 +310,7 @@ fn gen_contexts<'a>(
                     patterns.push(gen_simple_match(
                         state,
                         interpreted,
-                        &name,
+                        name,
                         rule_key,
                         is_top_level,
                         &meta_content_scope,
@@ -315,8 +322,8 @@ fn gen_contexts<'a>(
                 }
             } else {
                 // Start a branch point or use an existing one
-                let branch_point_name: String;
-                let include_context_name: String;
+                let branch_point_name: &str;
+                let include_context_name: &str;
                 {
                     // TODO: No need for context.end, context.empty or
                     // branch_point in this struct.
@@ -338,7 +345,7 @@ fn gen_contexts<'a>(
                         state.include_context_cache.get(&key)
                     {
                         patterns.push(sublime_syntax::ContextPattern::Include(
-                            include_context_name.clone(),
+                            include_context_name,
                         ));
                         continue;
                     } else {
@@ -348,7 +355,8 @@ fn gen_contexts<'a>(
 
                         include_context_name =
                             create_branch_point_include_context_name(
-                                &branch_point_name,
+                                state,
+                                branch_point_name,
                             );
                         assert!(!state
                             .contexts
@@ -356,7 +364,7 @@ fn gen_contexts<'a>(
 
                         state
                             .include_context_cache
-                            .insert(key, include_context_name.clone());
+                            .insert(key, include_context_name);
                     }
                 }
 
@@ -385,10 +393,8 @@ fn gen_contexts<'a>(
                     let can_fail = is_last
                         && branch_point.as_ref().map_or(true, |bp| bp.can_fail);
                     let branch_point_name = match &branch_point {
-                        Some(branch_point) if !can_fail => {
-                            branch_point.name.clone()
-                        }
-                        _ => branch_point_name.clone(),
+                        Some(branch_point) if !can_fail => branch_point.name,
+                        _ => branch_point_name,
                     };
 
                     // let branch_rule_key = branch_match.local_key(rule_key);
@@ -403,7 +409,7 @@ fn gen_contexts<'a>(
                             empty: false,
                         },
                         branch_point: Some(BranchPoint {
-                            name: branch_point_name.clone(),
+                            name: branch_point_name,
                             can_fail,
                         }),
                     };
@@ -411,12 +417,12 @@ fn gen_contexts<'a>(
                     let ctx_name = if let Some(name) =
                         state.context_cache.get(&branch_key)
                     {
-                        branches.push(name.clone());
+                        branches.push(*name);
                         None
                     } else {
                         let name =
                             create_context_name(state, branch_key.clone());
-                        branches.push(name.clone());
+                        branches.push(name);
                         Some(name)
                     };
 
@@ -434,12 +440,12 @@ fn gen_contexts<'a>(
                         };
 
                         if let Some(name) = state.context_cache.get(&next_key) {
-                            Some(name.clone())
+                            Some(*name)
                         } else {
                             let name =
                                 create_context_name(state, next_key.clone());
 
-                            next_contexts.push((name.clone(), next_key));
+                            next_contexts.push(next_key);
                             Some(name)
                         }
                     } else {
@@ -447,13 +453,17 @@ fn gen_contexts<'a>(
                     };
 
                     if let Some(ctx_name) = ctx_name {
-                        let scope =
-                            scope_for_match_stack(interpreted, None, terminal);
+                        let scope = scope_for_match_stack(
+                            state,
+                            interpreted,
+                            None,
+                            terminal,
+                        );
 
                         let (exit, pop) = if let Some(name) = next_name {
                             // Using set in branch_point is broken, so we
                             // have to use push.
-                            (sublime_syntax::ContextChange::Push(vec![name]), 1)
+                            (sublime_syntax::ContextChange::PushOne(name), 1)
                         } else {
                             (sublime_syntax::ContextChange::None, 1)
                         };
@@ -461,7 +471,7 @@ fn gen_contexts<'a>(
                         let terminal_match = gen_terminal(
                             state,
                             interpreted,
-                            &ctx_name,
+                            ctx_name,
                             rule_key,
                             &meta_content_scope,
                             &branch_point,
@@ -471,16 +481,21 @@ fn gen_contexts<'a>(
                             pop,
                         );
 
+                        let matches = state
+                            .compiler
+                            .allocator
+                            .alloc_slice_clone(&[terminal_match]);
+
                         state.contexts.insert(
                             ctx_name,
                             sublime_syntax::Context {
-                                meta_scope: sublime_syntax::Scope::empty(),
+                                meta_scope: sublime_syntax::Scope::EMPTY,
                                 meta_content_scope:
-                                    sublime_syntax::Scope::empty(),
+                                    sublime_syntax::Scope::EMPTY,
                                 meta_include_prototype: false,
                                 clear_scopes:
                                     sublime_syntax::ScopeClear::Amount(0),
-                                matches: vec![terminal_match],
+                                matches,
                                 comment: None,
                             },
                         );
@@ -488,37 +503,45 @@ fn gen_contexts<'a>(
                 }
 
                 assert!(branches.len() > 1);
+                let branches =
+                    state.compiler.allocator.alloc_slice_clone(&branches);
 
                 let lookahead_regex =
-                    format!("(?={})", state.compiler.resolve_symbol(regex));
+                    bumpalo::format!(in &state.compiler.allocator,
+                        "(?={})", state.compiler.resolve_symbol(regex),
+                    )
+                    .into_bump_str();
 
-                let comment = format!(
+                let comment = bumpalo::format!(in &state.compiler.allocator,
                     "Include context for branch point {}",
                     branch_point_name
-                );
+                )
+                .into_bump_str();
+
+                let matches = state.compiler.allocator.alloc_slice_clone(&[
+                    sublime_syntax::ContextPattern::Match(
+                        sublime_syntax::Match {
+                            pattern: sublime_syntax::Pattern(lookahead_regex),
+                            scope: sublime_syntax::Scope::EMPTY,
+                            captures: &[],
+                            change_context:
+                                sublime_syntax::ContextChange::Branch(
+                                    branch_point_name,
+                                    branches,
+                                ),
+                            pop: 0,
+                        },
+                    ),
+                ]);
 
                 state.contexts.insert(
-                    include_context_name.clone(),
+                    include_context_name,
                     sublime_syntax::Context {
-                        meta_scope: sublime_syntax::Scope::empty(),
-                        meta_content_scope: sublime_syntax::Scope::empty(),
+                        meta_scope: sublime_syntax::Scope::EMPTY,
+                        meta_content_scope: sublime_syntax::Scope::EMPTY,
                         meta_include_prototype: true,
                         clear_scopes: sublime_syntax::ScopeClear::Amount(0),
-                        matches: vec![sublime_syntax::ContextPattern::Match(
-                            sublime_syntax::Match {
-                                pattern: sublime_syntax::Pattern::new(
-                                    lookahead_regex,
-                                ),
-                                scope: sublime_syntax::Scope::empty(),
-                                captures: vec![],
-                                change_context:
-                                    sublime_syntax::ContextChange::Branch(
-                                        branch_point_name,
-                                        branches,
-                                    ),
-                                pop: 0,
-                            },
-                        )],
+                        matches,
                         comment: Some(comment),
                     },
                 );
@@ -557,21 +580,26 @@ fn gen_contexts<'a>(
             patterns.push(pattern);
         }
 
+        let patterns = state.compiler.allocator.alloc_slice_clone(&patterns);
+
+        let comment = bumpalo::format!(in &state.compiler.allocator,
+            "Rule: {}",
+            rule_key.with_compiler(state.compiler),
+            // context_key.with_compiler(state.compiler)
+        )
+        .into_bump_str();
+
         assert!(state.contexts.get(&name).is_none());
         state.contexts.insert(
-            name.clone(),
+            name,
             sublime_syntax::Context {
                 meta_content_scope,
-                meta_scope: sublime_syntax::Scope::empty(),
+                meta_scope: sublime_syntax::Scope::EMPTY,
                 // meta_scope,
                 meta_include_prototype,
                 clear_scopes: sublime_syntax::ScopeClear::Amount(0),
                 matches: patterns,
-                comment: Some(format!(
-                    "Rule: {}",
-                    rule_key.with_compiler(state.compiler),
-                    // context_key.with_compiler(state.compiler)
-                )),
+                comment: Some(comment),
             },
         );
     }
@@ -583,19 +611,19 @@ fn gen_contexts<'a>(
 
 fn gen_end_match<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     rule_key: Key,
     is_top_level: bool,
-    branch_point: &Option<BranchPoint>,
+    branch_point: &Option<BranchPoint<'a>>,
     lookahead: &Lookahead<'a>,
     capture: bool,
-) -> Option<sublime_syntax::ContextPattern> {
+) -> Option<sublime_syntax::ContextPattern<'a>> {
     match &lookahead.end {
         lookahead::End::Illegal => Some(if lookahead.empty && !capture {
             sublime_syntax::Match {
                 pattern: sublime_syntax::Pattern::from(r"(?=\S)"),
-                scope: sublime_syntax::Scope::empty(),
-                captures: vec![],
+                scope: sublime_syntax::Scope::EMPTY,
+                captures: &[],
                 change_context: sublime_syntax::ContextChange::None,
                 pop: 1,
             }
@@ -604,18 +632,22 @@ fn gen_end_match<'a>(
         {
             sublime_syntax::Match {
                 pattern: sublime_syntax::Pattern::from(r"\S"),
-                scope: sublime_syntax::Scope::empty(),
-                captures: vec![],
+                scope: sublime_syntax::Scope::EMPTY,
+                captures: &[],
                 change_context: sublime_syntax::ContextChange::Fail(
-                    branch_point.as_ref().unwrap().name.clone(),
+                    branch_point.as_ref().unwrap().name,
                 ),
                 pop: 0,
             }
         } else {
             sublime_syntax::Match {
                 pattern: sublime_syntax::Pattern::from(r"\S"),
-                scope: parse_scope(&interpreted.metadata, "invalid.illegal"),
-                captures: vec![],
+                scope: parse_scope(
+                    &interpreted.metadata,
+                    "invalid.illegal",
+                    state.compiler,
+                ),
+                captures: &[],
                 change_context: sublime_syntax::ContextChange::None,
                 pop: if capture { 0 } else { 1 },
             }
@@ -632,19 +664,19 @@ fn gen_end_match<'a>(
             let name = if let Some(name) =
                 state.context_cache.get(&push_context_key)
             {
-                name.clone()
+                name
             } else {
                 let name = create_context_name(state, push_context_key.clone());
 
-                state.context_queue.push((name.clone(), push_context_key));
+                state.context_queue.push(push_context_key);
                 name
             };
 
             Some(sublime_syntax::Match {
                 pattern: sublime_syntax::Pattern::from(r"(?=\S)"),
-                scope: sublime_syntax::Scope::empty(),
-                captures: vec![],
-                change_context: sublime_syntax::ContextChange::Push(vec![name]),
+                scope: sublime_syntax::Scope::EMPTY,
+                captures: &[],
+                change_context: sublime_syntax::ContextChange::PushOne(name),
                 pop: 1,
             })
         }
@@ -654,16 +686,16 @@ fn gen_end_match<'a>(
 
 fn gen_terminal<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     context_name: &str,
     rule_key: Key,
-    meta_content_scope: &sublime_syntax::Scope,
+    meta_content_scope: &sublime_syntax::Scope<'a>,
     branch_point: &Option<BranchPoint>,
-    mut scope: sublime_syntax::Scope,
+    mut scope: sublime_syntax::Scope<'a>,
     terminal: &Terminal<'a>,
-    mut exit: sublime_syntax::ContextChange,
+    mut exit: sublime_syntax::ContextChange<'a>,
     mut pop_amount: u16,
-) -> sublime_syntax::ContextPattern {
+) -> sublime_syntax::ContextPattern<'a> {
     match &terminal.options.unwrap().embed {
         TerminalEmbed::Embed {
             embed,
@@ -673,10 +705,10 @@ fn gen_terminal<'a>(
         } => {
             let embed_exit =
                 sublime_syntax::ContextChange::Embed(sublime_syntax::Embed {
-                    embed: embed.clone(),
-                    embed_scope: embed_scope.clone(),
-                    escape: Some(sublime_syntax::Pattern::new(escape.clone())),
-                    escape_captures: escape_captures.clone(),
+                    embed,
+                    embed_scope: *embed_scope,
+                    escape: Some(sublime_syntax::Pattern(escape)),
+                    escape_captures,
                 });
 
             match &mut exit {
@@ -692,31 +724,36 @@ fn gen_terminal<'a>(
                         branch_point,
                     );
 
+                    let matches =
+                        state.compiler.allocator.alloc_slice_clone(&[
+                            sublime_syntax::ContextPattern::Match(
+                                sublime_syntax::Match {
+                                    pattern: sublime_syntax::Pattern::from(""),
+                                    scope: sublime_syntax::Scope::EMPTY,
+                                    captures: &[],
+                                    change_context: embed_exit,
+                                    pop: 1,
+                                },
+                            ),
+                        ]);
+
                     state.contexts.insert(
-                        embed_context.clone(),
+                        embed_context,
                         sublime_syntax::Context {
-                            meta_scope: sublime_syntax::Scope::empty(),
-                            meta_content_scope: sublime_syntax::Scope::empty(),
+                            meta_scope: sublime_syntax::Scope::EMPTY,
+                            meta_content_scope: sublime_syntax::Scope::EMPTY,
                             meta_include_prototype: true,
                             clear_scopes: sublime_syntax::ScopeClear::Amount(0),
-                            matches: vec![
-                                sublime_syntax::ContextPattern::Match(
-                                    sublime_syntax::Match {
-                                        pattern: sublime_syntax::Pattern::from(
-                                            "",
-                                        ),
-                                        scope: sublime_syntax::Scope::empty(),
-                                        captures: vec![],
-                                        change_context: embed_exit,
-                                        pop: 1,
-                                    },
-                                ),
-                            ],
+                            matches,
                             comment: None,
                         },
                     );
 
-                    contexts.push(embed_context);
+                    // TODO: Avoid this extra allocation
+                    let mut ctx = contexts.to_vec();
+                    ctx.push(embed_context);
+                    *contexts =
+                        state.compiler.allocator.alloc_slice_clone(&ctx);
                 }
                 _ => panic!(),
             }
@@ -734,25 +771,25 @@ fn gen_terminal<'a>(
                 };
 
                 if let Some(name) = state.context_cache.get(&prototype_key) {
-                    name.to_string()
+                    name
                 } else {
                     let name =
                         create_context_name(state, prototype_key.clone());
 
-                    state.context_queue.push((name.clone(), prototype_key));
+                    state.context_queue.push(prototype_key);
                     name
                 }
             };
 
             let include_exit = sublime_syntax::ContextChange::IncludeEmbed(
                 sublime_syntax::IncludeEmbed {
-                    path: path.to_string(),
+                    path,
                     use_push: false,
-                    with_prototype: vec![
-                        sublime_syntax::ContextPattern::Include(
+                    with_prototype: state.compiler.allocator.alloc_slice_clone(
+                        &[sublime_syntax::ContextPattern::Include(
                             prototype_context,
-                        ),
-                    ],
+                        )],
+                    ),
                 },
             );
 
@@ -769,31 +806,36 @@ fn gen_terminal<'a>(
                         branch_point,
                     );
 
+                    let matches =
+                        state.compiler.allocator.alloc_slice_clone(&[
+                            sublime_syntax::ContextPattern::Match(
+                                sublime_syntax::Match {
+                                    pattern: sublime_syntax::Pattern::from(""),
+                                    scope: sublime_syntax::Scope::EMPTY,
+                                    captures: &[],
+                                    change_context: include_exit,
+                                    pop: 0,
+                                },
+                            ),
+                        ]);
+
                     state.contexts.insert(
-                        embed_context.clone(),
+                        embed_context,
                         sublime_syntax::Context {
-                            meta_scope: sublime_syntax::Scope::empty(),
-                            meta_content_scope: sublime_syntax::Scope::empty(),
+                            meta_scope: sublime_syntax::Scope::EMPTY,
+                            meta_content_scope: sublime_syntax::Scope::EMPTY,
                             meta_include_prototype: false,
                             clear_scopes: sublime_syntax::ScopeClear::Amount(0),
-                            matches: vec![
-                                sublime_syntax::ContextPattern::Match(
-                                    sublime_syntax::Match {
-                                        pattern: sublime_syntax::Pattern::from(
-                                            "",
-                                        ),
-                                        scope: sublime_syntax::Scope::empty(),
-                                        captures: vec![],
-                                        change_context: include_exit,
-                                        pop: 0,
-                                    },
-                                ),
-                            ],
+                            matches,
                             comment: None,
                         },
                     );
 
-                    contexts.push(embed_context);
+                    // TODO: Avoid this extra allocation
+                    let mut ctx = contexts.to_vec();
+                    ctx.push(embed_context);
+                    *contexts =
+                        state.compiler.allocator.alloc_slice_clone(&ctx);
                 }
                 _ => panic!(),
             }
@@ -805,8 +847,7 @@ fn gen_terminal<'a>(
     if let sublime_syntax::ContextChange::Push(contexts) = &exit {
         if pop_amount > 0 && contexts[0] == context_name {
             if contexts.len() > 1 {
-                exit =
-                    sublime_syntax::ContextChange::Push(contexts[1..].to_vec());
+                exit = sublime_syntax::ContextChange::Push(&contexts[1..]);
             } else {
                 exit = sublime_syntax::ContextChange::None;
             }
@@ -816,16 +857,17 @@ fn gen_terminal<'a>(
 
     if let sublime_syntax::ContextChange::None = &exit {
         if pop_amount > 0 {
-            scope.prepend(meta_content_scope);
+            scope =
+                meta_content_scope.extended(scope, &state.compiler.allocator);
         }
     }
 
     sublime_syntax::ContextPattern::Match(sublime_syntax::Match {
-        pattern: sublime_syntax::Pattern::new(
-            state.compiler.resolve_symbol(terminal.regex).to_string(),
+        pattern: sublime_syntax::Pattern(
+            state.compiler.resolve_symbol(terminal.regex),
         ),
         scope,
-        captures: terminal.options.unwrap().captures.clone(),
+        captures: terminal.options.unwrap().captures,
         change_context: exit,
         pop: pop_amount,
     })
@@ -833,16 +875,16 @@ fn gen_terminal<'a>(
 
 fn gen_simple_match<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     context_name: &str,
     rule_key: Key,
     is_top_level: bool,
-    meta_content_scope: &sublime_syntax::Scope,
-    branch_point: &Option<BranchPoint>,
+    meta_content_scope: &sublime_syntax::Scope<'a>,
+    branch_point: &Option<BranchPoint<'a>>,
     lookahead: &Lookahead<'a>,
-    scope: sublime_syntax::Scope,
+    scope: sublime_syntax::Scope<'a>,
     terminal: &Terminal<'a>,
-) -> sublime_syntax::ContextPattern {
+) -> sublime_syntax::ContextPattern<'a> {
     let contexts = if let Some(StackEntry {
         data: StackEntryData::Repetition { expression },
         remaining,
@@ -875,7 +917,9 @@ fn gen_simple_match<'a>(
             let exit = if contexts.is_empty() {
                 sublime_syntax::ContextChange::None
             } else {
-                sublime_syntax::ContextChange::Push(contexts)
+                sublime_syntax::ContextChange::Push(
+                    state.compiler.allocator.alloc_slice_clone(&contexts),
+                )
             };
 
             return gen_terminal(
@@ -903,13 +947,11 @@ fn gen_simple_match<'a>(
 
             if let Some(name) = state.context_cache.get(&repetition_context_key)
             {
-                contexts.insert(0, name.to_string());
+                contexts.insert(0, name);
             } else {
                 let name =
                     create_context_name(state, repetition_context_key.clone());
-                state
-                    .context_queue
-                    .push((name.clone(), repetition_context_key));
+                state.context_queue.push(repetition_context_key);
                 contexts.insert(0, name);
             }
         }
@@ -936,7 +978,12 @@ fn gen_simple_match<'a>(
 
         (sublime_syntax::ContextChange::None, pop)
     } else {
-        (sublime_syntax::ContextChange::Push(contexts), 1)
+        (
+            sublime_syntax::ContextChange::Push(
+                state.compiler.allocator.alloc_slice_clone(&contexts),
+            ),
+            1,
+        )
     };
 
     if branch_point.is_some() && !terminal.has_any_remaining() {
@@ -959,12 +1006,12 @@ fn gen_simple_match<'a>(
 
 fn gen_simple_match_contexts<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     mut rule_key: Key,
     mut is_top_level: bool,
     remaining: &[&'a Expression],
     stack: &[StackEntry<'a>],
-) -> Vec<String> {
+) -> Vec<&'a str> {
     // Skip stack entries that don't have any remaining expressions. This avoids
     // creating meta-scope contexts when those get immediately popped anyway.
     let offset = if remaining.is_empty() {
@@ -1069,53 +1116,64 @@ fn gen_simple_match_contexts<'a>(
 
 fn gen_meta_content_scope_context<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     rule_key: Key,
-) -> Option<String> {
-    let meta_content_scope = interpreted.rules[&rule_key].options.scope.clone();
+) -> Option<&'a str> {
+    let meta_content_scope = interpreted.rules[&rule_key].options.scope;
 
     if !meta_content_scope.is_empty() {
         let mut rule_meta_ctx_name = build_rule_key_name(state, rule_key);
         rule_meta_ctx_name.push_str("|meta");
 
-        if !state.contexts.contains_key(&rule_meta_ctx_name) {
+        if let Some((name, _)) =
+            state.contexts.get_key_value(rule_meta_ctx_name.as_str())
+        {
+            Some(name)
+        } else {
+            let name = state.compiler.allocator.alloc_str(&rule_meta_ctx_name);
+
+            let matches = state.compiler.allocator.alloc_slice_clone(&[
+                sublime_syntax::ContextPattern::Match(sublime_syntax::Match {
+                    pattern: sublime_syntax::Pattern::from(""),
+                    scope: sublime_syntax::Scope::EMPTY,
+                    captures: &[],
+                    change_context: sublime_syntax::ContextChange::None,
+                    pop: 1,
+                }),
+            ]);
+
+            let comment = bumpalo::format!(in &state.compiler.allocator,
+                "Meta scope context for {}",
+                rule_key.with_compiler(state.compiler),
+            )
+            .into_bump_str();
+
             state.contexts.insert(
-                rule_meta_ctx_name.clone(),
+                name,
                 sublime_syntax::Context {
                     meta_content_scope,
-                    meta_scope: sublime_syntax::Scope::empty(),
+                    meta_scope: sublime_syntax::Scope::EMPTY,
                     meta_include_prototype: true,
                     clear_scopes: sublime_syntax::ScopeClear::Amount(0),
-                    matches: vec![sublime_syntax::ContextPattern::Match(
-                        sublime_syntax::Match {
-                            pattern: sublime_syntax::Pattern::from(""),
-                            scope: sublime_syntax::Scope::empty(),
-                            captures: vec![],
-                            change_context: sublime_syntax::ContextChange::None,
-                            pop: 1,
-                        },
-                    )],
-                    comment: Some(format!(
-                        "Meta scope context for {}",
-                        rule_key.with_compiler(state.compiler)
-                    )),
+                    matches,
+                    comment: Some(comment),
                 },
             );
-        }
 
-        Some(rule_meta_ctx_name)
+            Some(name)
+        }
     } else {
         None
     }
 }
 
-fn gen_entry_context(
-    state: &mut State<'_>,
+fn gen_entry_context<'a>(
+    state: &mut State<'a>,
     rule_key: Key,
-    contexts: Vec<String>,
-) -> String {
-    if let Some(context) = state.entry_contexts.get(&contexts) {
-        return context.clone();
+    contexts: Vec<&'a str>,
+) -> &'a str {
+    if let Some(context) = state.entry_contexts.get(&contexts.as_slice()) {
+        return context;
     }
 
     let index = if let Some(rule) = state.rules.get_mut(&rule_key) {
@@ -1134,43 +1192,44 @@ fn gen_entry_context(
         0
     };
 
-    let mut entry_ctx = contexts.last().unwrap().to_string();
-    write!(entry_ctx, "|entry-{}", index).unwrap();
+    let entry_ctx = bumpalo::format!(in &state.compiler.allocator, "{}|entry-{}", contexts.last().unwrap(), index).into_bump_str();
 
-    assert!(!state.contexts.contains_key(&entry_ctx));
+    assert!(!state.contexts.contains_key(entry_ctx));
+
+    let contexts = state.compiler.allocator.alloc_slice_clone(&contexts);
+
+    let matches = state.compiler.allocator.alloc_slice_clone(&[
+        sublime_syntax::ContextPattern::Match(sublime_syntax::Match {
+            pattern: sublime_syntax::Pattern::from(""),
+            scope: sublime_syntax::Scope::EMPTY,
+            captures: &[],
+            change_context: sublime_syntax::ContextChange::Set(contexts),
+            pop: 0,
+        }),
+    ]);
 
     state.contexts.insert(
-        entry_ctx.clone(),
+        entry_ctx,
         sublime_syntax::Context {
-            meta_content_scope: sublime_syntax::Scope::empty(),
-            meta_scope: sublime_syntax::Scope::empty(),
+            meta_content_scope: sublime_syntax::Scope::EMPTY,
+            meta_scope: sublime_syntax::Scope::EMPTY,
             meta_include_prototype: true,
             clear_scopes: sublime_syntax::ScopeClear::Amount(0),
-            matches: vec![sublime_syntax::ContextPattern::Match(
-                sublime_syntax::Match {
-                    pattern: sublime_syntax::Pattern::from(""),
-                    scope: sublime_syntax::Scope::empty(),
-                    captures: vec![],
-                    change_context: sublime_syntax::ContextChange::Set(
-                        contexts.clone(),
-                    ),
-                    pop: 0,
-                },
-            )],
+            matches,
             comment: None,
         },
     );
-    state.entry_contexts.insert(contexts, entry_ctx.clone());
+    state.entry_contexts.insert(contexts, entry_ctx);
     entry_ctx
 }
 
 fn gen_simple_match_remaining_context<'a>(
     state: &mut State<'a>,
-    interpreted: &'a Interpreted,
+    interpreted: &Interpreted<'a>,
     mut is_top_level: bool,
     mut rule_key: Key,
     mut lookahead: Lookahead<'a>,
-) -> (Vec<String>, Option<Key>) {
+) -> (Vec<&'a str>, Option<Key>) {
     // We can end up in situations where we have a context/rule_key that has
     // redundant variables, ie. every match stack has the same variable at the
     // end. Using a similar algorithm to gen_simple_match_contexts we can
@@ -1225,18 +1284,14 @@ fn gen_simple_match_remaining_context<'a>(
         is_top_level = true;
     }
 
-    let context_key = ContextKey {
-        rule_key,
-        is_top_level,
-        lookahead: lookahead.clone(),
-        branch_point: None,
-    };
+    let context_key =
+        ContextKey { rule_key, is_top_level, lookahead, branch_point: None };
 
     if let Some(name) = state.context_cache.get(&context_key) {
-        contexts.push(name.to_string());
+        contexts.push(name);
     } else {
         let name = create_context_name(state, context_key.clone());
-        state.context_queue.push((name.clone(), context_key));
+        state.context_queue.push(context_key);
 
         contexts.push(name);
     }
@@ -1271,11 +1326,11 @@ fn build_rule_key_name(state: &State, rule_key: Key) -> String {
 }
 
 // Generate an uncached unique name for a context key
-fn create_uncached_context_name(
-    state: &mut State<'_>,
+fn create_uncached_context_name<'a>(
+    state: &mut State<'a>,
     rule_key: Key,
     branch_point: &Option<BranchPoint>,
-) -> String {
+) -> &'a str {
     let mut result = build_rule_key_name(state, rule_key);
 
     // Add inner context count to prevent context name collisions in inner contexts
@@ -1299,28 +1354,28 @@ fn create_uncached_context_name(
     // Add optional branch point
     if let Some(branch_point) = &branch_point {
         result.push('|');
-        result.push_str(&branch_point.name);
+        result.push_str(branch_point.name);
     }
 
-    result
+    state.compiler.allocator.alloc_str(&result)
 }
 
 // Generate a unique name for a context key
 fn create_context_name<'a>(
     state: &mut State<'a>,
     key: ContextKey<'a>,
-) -> String {
+) -> &'a str {
     let name =
         create_uncached_context_name(state, key.rule_key, &key.branch_point);
 
-    let old_entry = state.context_cache.insert(key, name.clone());
+    let old_entry = state.context_cache.insert(key, name);
     assert!(old_entry.is_none());
 
     name
 }
 
 // Generate a new branch point for a rule
-fn create_branch_point_name(state: &mut State, key: Key) -> String {
+fn create_branch_point_name<'a>(state: &mut State<'a>, key: Key) -> &'a str {
     let index = if let Some(rule) = state.rules.get_mut(&key) {
         rule.branch_point_count += 1;
         rule.branch_point_count
@@ -1336,32 +1391,45 @@ fn create_branch_point_name(state: &mut State, key: Key) -> String {
         1
     };
 
-    format!("{}@{}", key.get_name(state.compiler), index)
+    bumpalo::format!(
+        in &state.compiler.allocator,
+        "{}@{}",
+        key.get_name(state.compiler),
+        index
+    )
+    .into_bump_str()
 }
 
-fn create_branch_point_include_context_name(branch_point: &str) -> String {
-    format!("include!{}", branch_point)
+fn create_branch_point_include_context_name<'a>(
+    state: &mut State<'a>,
+    branch_point: &str,
+) -> &'a str {
+    bumpalo::format!(
+        in &state.compiler.allocator,
+        "include!{}", branch_point)
+    .into_bump_str()
 }
 
 fn scope_for_match_stack<'a>(
-    interpreted: &'a Interpreted,
+    state: &mut State<'a>,
+    interpreted: &Interpreted<'a>,
     rule_key: Option<Key>,
     terminal: &Terminal<'a>,
-) -> sublime_syntax::Scope {
-    let mut scope = sublime_syntax::Scope::empty();
+) -> sublime_syntax::Scope<'a> {
+    let mut scope = sublime_syntax::Scope::EMPTY;
 
     if let Some(rule_key) = rule_key {
-        scope = interpreted.rules[&rule_key].options.scope.clone();
+        scope = interpreted.rules[&rule_key].options.scope;
     }
 
     for entry in terminal.stack.iter().rev() {
         if let StackEntryData::Variable { key } = &entry.data {
             let rule_options = &interpreted.rules[key].options;
 
-            scope.extend(&rule_options.scope);
+            scope =
+                scope.extended(rule_options.scope, &state.compiler.allocator);
         }
     }
 
-    scope.extend(&terminal.options.unwrap().scope);
-    scope
+    scope.extended(terminal.options.unwrap().scope, &state.compiler.allocator)
 }

@@ -34,8 +34,8 @@ pub struct Collection<'a> {
 }
 
 struct State<'a, 'b> {
-    compiler: &'b Compiler,
-    options: &'a CompileOptions<'a>,
+    compiler: &'a Compiler,
+    options: &'b CompileOptions<'a>,
     variables: VarMap,
     definitions: DefinitionMap<'a>,
     errors: Vec<Error>,
@@ -43,9 +43,9 @@ struct State<'a, 'b> {
 }
 
 pub fn collect<'a>(
-    compiler: &Compiler,
-    options: &'a CompileOptions<'a>,
-    grammar: &'a Grammar<'a>,
+    compiler: &'a Compiler,
+    options: &CompileOptions<'a>,
+    grammar: &Grammar<'a>,
 ) -> CompileResult<Collection<'a>> {
     let mut state = State {
         compiler,
@@ -70,7 +70,7 @@ pub fn collect<'a>(
 }
 
 fn collect_parameters<'a, 'b>(
-    grammar: &'a Grammar<'a>,
+    grammar: &Grammar<'a>,
     state: &mut State<'a, 'b>,
 ) {
     let mut duplicate: Option<&Node<'a>> = None;
@@ -213,7 +213,7 @@ fn collect_parameters<'a, 'b>(
 }
 
 fn collect_definitions<'a, 'b>(
-    grammar: &'a Grammar<'a>,
+    grammar: &Grammar<'a>,
     state: &mut State<'a, 'b>,
 ) {
     for node in &grammar.nodes {
@@ -256,9 +256,7 @@ fn collect_definitions<'a, 'b>(
                 }
 
                 let num_params = parameters.as_ref().map_or(0, |node| {
-                    if let Node { data: NodeData::Parameters(v), .. } =
-                        node.as_ref()
-                    {
+                    if let Node { data: NodeData::Parameters(v), .. } = node {
                         v.len()
                     } else {
                         panic!();

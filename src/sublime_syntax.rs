@@ -1,6 +1,6 @@
 /// This file describes the structure of sublime-syntax files and defines a
 /// serializer for it.
-use hashbrown::HashMap;
+use bumpalo::Bump;
 use std::fmt::{Error, Write};
 
 struct SerializeState<'a> {
@@ -34,17 +34,17 @@ macro_rules! indent {
 }
 
 #[derive(Debug)]
-pub struct Syntax {
-    pub name: String,
-    pub file_extensions: Vec<String>,
-    pub first_line_match: Option<Pattern>,
-    pub scope: Scope,
+pub struct Syntax<'a> {
+    pub name: &'a str,
+    pub file_extensions: &'a [&'a str],
+    pub first_line_match: Option<Pattern<'a>>,
+    pub scope: Scope<'a>,
     pub hidden: bool,
-    pub variables: HashMap<String, Pattern>,
-    pub contexts: HashMap<String, Context>,
+    pub variables: &'a [(&'a str, Pattern<'a>)],
+    pub contexts: &'a [(&'a str, Context<'a>)],
 }
 
-impl Syntax {
+impl Syntax<'_> {
     pub fn serialize(&self, output: &mut dyn Write) -> Result<(), Error> {
         let mut state = SerializeState { indent: 0, output };
 
@@ -57,7 +57,7 @@ impl Syntax {
         if !self.file_extensions.is_empty() {
             serializeln!(state, "file_extensions:")?;
 
-            for extension in &self.file_extensions {
+            for extension in self.file_extensions {
                 serializeln!(state, "  - {}", extension)?;
             }
         }
@@ -79,34 +79,25 @@ impl Syntax {
         if !self.variables.is_empty() {
             serializeln!(state, "variables:")?;
 
-            let mut keys = self.variables.keys().collect::<Vec<&String>>();
-            keys.sort();
-            for key in &keys {
+            for (name, pattern) in self.variables {
                 state.write_indentation()?;
-                write!(&mut state.output, "  {}: ", key)?;
-                self.variables
-                    .get::<str>(key)
-                    .unwrap()
-                    .serializeln(&mut state)?;
+                write!(&mut state.output, "  {}: ", name)?;
+                pattern.serializeln(&mut state)?;
             }
         }
 
         if !self.contexts.is_empty() {
             serializeln!(state, "contexts:")?;
 
-            let mut keys = self.contexts.keys().collect::<Vec<&String>>();
-            keys.sort();
             indent!(state, {
-                for key in &keys {
-                    let context = self.contexts.get::<str>(key).unwrap();
-
-                    if let Some(comment) = &context.comment {
+                for (name, context) in self.contexts {
+                    if let Some(comment) = context.comment {
                         for line in comment.lines() {
                             serializeln!(state, "# {}", line)?;
                         }
                     }
 
-                    serializeln!(state, "{}:", key)?;
+                    serializeln!(state, "{}:", name)?;
                     indent!(state, {
                         context.serialize(&mut state)?;
                     });
@@ -119,53 +110,50 @@ impl Syntax {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Pattern {
-    pub regex: String,
-}
+pub struct Pattern<'a>(pub &'a str);
 
-impl Pattern {
-    pub fn new(regex: String) -> Pattern {
-        Pattern { regex }
-    }
-
+impl Pattern<'_> {
     fn serializeln(&self, state: &mut SerializeState) -> Result<(), Error> {
-        if self.regex.find('\n').is_some() {
+        if self.0.find('\n').is_some() {
             writeln!(state.output, "|-")?;
             indent!(state, {
                 indent!(state, {
-                    for line in self.regex.split('\n') {
+                    for line in self.0.split('\n') {
                         serializeln!(state, "{}", line)?;
                     }
                 });
             });
         } else {
-            writeln!(state.output, "'{}'", self.regex.replace("\\'", "''"))?;
+            writeln!(state.output, "'{}'", self.0.replace("\\'", "''"))?;
         }
 
         Ok(())
     }
 }
 
-impl From<&str> for Pattern {
-    fn from(regex: &str) -> Pattern {
-        Pattern { regex: regex.to_string() }
+impl<'a> From<&'a str> for Pattern<'a> {
+    fn from(regex: &'a str) -> Pattern<'a> {
+        Pattern(regex)
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Scope(pub String);
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub struct Scope<'a>(&'a str);
 
-impl Scope {
-    pub fn empty() -> Scope {
-        Scope(String::new())
-    }
+impl<'a> Scope<'a> {
+    pub const EMPTY: Scope<'static> = Scope("");
 
-    pub fn new(scope: String) -> Scope {
-        debug_assert!(Self::parse(&scope).0 == scope);
+    pub fn new(scope: &'a str) -> Scope<'a> {
+        let tmp_alloc = bumpalo::Bump::new();
+        debug_assert!(Scope::parse(scope, &tmp_alloc).0 == scope);
         Scope(scope)
     }
 
-    pub fn parse(scopes: &str) -> Scope {
+    pub fn as_str(&self) -> &'a str {
+        self.0
+    }
+
+    pub fn parse(scopes: &str, allocator: &'a Bump) -> Self {
         let mut s = String::new();
         for (i, part) in scopes.split_ascii_whitespace().enumerate() {
             if i != 0 {
@@ -173,10 +161,14 @@ impl Scope {
             }
             s.push_str(part);
         }
-        Scope(s)
+        Scope(allocator.alloc_str(&s))
     }
 
-    pub fn parse_with_postfix(scopes: &str, postfix: &str) -> Scope {
+    pub fn parse_with_postfix(
+        scopes: &str,
+        postfix: &str,
+        allocator: &'a Bump,
+    ) -> Scope<'a> {
         let mut s = String::new();
         for (i, part) in scopes.split_ascii_whitespace().enumerate() {
             if i != 0 {
@@ -186,33 +178,28 @@ impl Scope {
             s.push('.');
             s.push_str(postfix);
         }
-        Scope(s)
+        Scope(allocator.alloc_str(&s))
     }
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    pub fn prepend(&mut self, other: &Scope) {
+    pub fn extended(&self, other: Self, allocator: &'a Bump) -> Self {
         if self.is_empty() {
-            *self = other.clone();
-        } else if !other.is_empty() {
-            self.0.insert(0, ' ');
-            self.0.insert_str(0, &other.0);
-        }
-    }
-
-    pub fn extend(&mut self, other: &Scope) {
-        if self.is_empty() {
-            *self = other.clone();
-        } else if !other.is_empty() {
-            self.0.push(' ');
-            self.0.push_str(&other.0);
+            other
+        } else if other.is_empty() {
+            *self
+        } else {
+            Scope(
+                bumpalo::format!(in allocator, "{} {}", self.0, other.0)
+                    .into_bump_str(),
+            )
         }
     }
 }
 
-impl std::fmt::Display for Scope {
+impl std::fmt::Display for Scope<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.0.is_empty() {
             return Ok(());
@@ -229,16 +216,16 @@ pub enum ScopeClear {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Context {
-    pub meta_scope: Scope,
-    pub meta_content_scope: Scope,
+pub struct Context<'a> {
+    pub meta_scope: Scope<'a>,
+    pub meta_content_scope: Scope<'a>,
     pub meta_include_prototype: bool,
     pub clear_scopes: ScopeClear,
-    pub matches: Vec<ContextPattern>,
-    pub comment: Option<String>,
+    pub matches: &'a [ContextPattern<'a>],
+    pub comment: Option<&'a str>,
 }
 
-impl Context {
+impl Context<'_> {
     fn serialize(&self, state: &mut SerializeState) -> Result<(), Error> {
         if !self.meta_scope.is_empty() {
             serializeln!(state, "- meta_scope: {}", self.meta_scope)?;
@@ -266,7 +253,7 @@ impl Context {
             }
         }
 
-        for pattern in &self.matches {
+        for pattern in self.matches {
             pattern.serialize(state)?;
         }
 
@@ -275,12 +262,12 @@ impl Context {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum ContextPattern {
-    Match(Match),
-    Include(String),
+pub enum ContextPattern<'a> {
+    Match(Match<'a>),
+    Include(&'a str),
 }
 
-impl ContextPattern {
+impl ContextPattern<'_> {
     fn serialize(&self, state: &mut SerializeState) -> Result<(), Error> {
         match self {
             ContextPattern::Match(m) => {
@@ -296,15 +283,15 @@ impl ContextPattern {
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Match {
-    pub pattern: Pattern,
-    pub scope: Scope,
-    pub captures: Vec<Scope>,
-    pub change_context: ContextChange,
+pub struct Match<'a> {
+    pub pattern: Pattern<'a>,
+    pub scope: Scope<'a>,
+    pub captures: &'a [Scope<'a>],
+    pub change_context: ContextChange<'a>,
     pub pop: u16,
 }
 
-impl Match {
+impl Match<'_> {
     fn serialize(&self, state: &mut SerializeState) -> Result<(), Error> {
         state.write_indentation()?;
         write!(state.output, "- match: ")?;
@@ -315,7 +302,7 @@ impl Match {
                 serializeln!(state, "scope: {}", self.scope)?;
             }
 
-            write_captures(state, "captures", &self.captures)?;
+            write_captures(state, "captures", self.captures)?;
 
             match &self.change_context {
                 ContextChange::None => {}
@@ -323,6 +310,10 @@ impl Match {
                     state.write_indentation()?;
                     write!(&mut state.output, "push: ")?;
                     write_context_list(state, contexts)?;
+                }
+                ContextChange::PushOne(context) => {
+                    state.write_indentation()?;
+                    writeln!(&mut state.output, "push: {}", context)?;
                 }
                 ContextChange::Set(contexts) => {
                     state.write_indentation()?;
@@ -358,7 +349,7 @@ impl Match {
                     write_captures(
                         state,
                         "escape_captures",
-                        &embed.escape_captures,
+                        embed.escape_captures,
                     )?;
                 }
                 ContextChange::IncludeEmbed(embed) => {
@@ -371,7 +362,7 @@ impl Match {
                     if !embed.with_prototype.is_empty() {
                         serializeln!(state, "with_prototype:")?;
                         indent!(state, {
-                            for pattern in &embed.with_prototype {
+                            for pattern in embed.with_prototype {
                                 pattern.serialize(state)?;
                             }
                         });
@@ -381,7 +372,7 @@ impl Match {
                     serializeln!(state, "branch_point: {}", branch_point)?;
                     serializeln!(state, "branch:")?;
                     assert!(branches.len() > 1);
-                    for branch in branches {
+                    for branch in *branches {
                         serializeln!(state, "  - {}", branch)?;
                     }
                 }
@@ -421,7 +412,7 @@ fn write_captures(
 
 fn write_context_list(
     state: &mut SerializeState,
-    list: &[String],
+    list: &[&str],
 ) -> Result<(), Error> {
     if list.len() == 1 {
         writeln!(&mut state.output, "{}", list[0])
@@ -437,49 +428,48 @@ fn write_context_list(
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Embed {
-    pub embed: String,
-    pub embed_scope: Scope,
-    pub escape: Option<Pattern>,
-    pub escape_captures: Vec<Scope>,
+pub struct Embed<'a> {
+    pub embed: &'a str,
+    pub embed_scope: Scope<'a>,
+    pub escape: Option<Pattern<'a>>,
+    pub escape_captures: &'a [Scope<'a>],
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub struct IncludeEmbed {
-    pub path: String,
+pub struct IncludeEmbed<'a> {
+    pub path: &'a str,
     pub use_push: bool,
-    pub with_prototype: Vec<ContextPattern>,
+    pub with_prototype: &'a [ContextPattern<'a>],
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-pub enum ContextChange {
+pub enum ContextChange<'a> {
     None,
-    Push(Vec<String>),
-    Set(Vec<String>),
-    PushEmbed(Context),
-    SetEmbed(Context),
-    Embed(Embed),
-    IncludeEmbed(IncludeEmbed),
-    Branch(String, Vec<String>),
-    Fail(String),
+    Push(&'a [&'a str]),
+    PushOne(&'a str),
+    Set(&'a [&'a str]),
+    PushEmbed(Context<'a>),
+    SetEmbed(Context<'a>),
+    Embed(Embed<'a>),
+    IncludeEmbed(IncludeEmbed<'a>),
+    Branch(&'a str, &'a [&'a str]),
+    Fail(&'a str),
 }
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashMap;
-
     use crate::sublime_syntax::*;
 
     #[test]
     fn serialize_empty_syntax() {
         let syntax = Syntax {
-            name: "Empty Lang".to_string(),
-            file_extensions: vec!["tes".to_string(), "test".to_string()],
+            name: "Empty Lang",
+            file_extensions: &["tes", "test"],
             first_line_match: Some(Pattern::from(".*\\bfoo\\b")),
-            scope: Scope::parse("source.empty"),
+            scope: Scope::new("source.empty"),
             hidden: true,
-            variables: HashMap::new(),
-            contexts: HashMap::new(),
+            variables: &[],
+            contexts: &[],
         };
 
         let mut buf = String::new();
@@ -504,21 +494,16 @@ hidden: true\n"
     #[test]
     fn serialize_variables() {
         let syntax = Syntax {
-            name: "Vars".to_string(),
-            file_extensions: vec![],
+            name: "Vars",
+            file_extensions: &[],
             first_line_match: None,
-            scope: Scope::parse("source.vars text.vars"),
+            scope: Scope::new("source.vars text.vars"),
             hidden: false,
-            variables: {
-                let mut m = HashMap::new();
-                m.insert("foo".to_string(), Pattern::from("^foo\\b.*$"));
-                m.insert(
-                    "bar".to_string(),
-                    Pattern::from("\\bbar\\b|\\bfoo\\b"),
-                );
-                m
-            },
-            contexts: HashMap::new(),
+            variables: &[
+                ("bar", Pattern::from("\\bbar\\b|\\bfoo\\b")),
+                ("foo", Pattern::from("^foo\\b.*$")),
+            ],
+            contexts: &[],
         };
 
         let mut buf = String::new();
@@ -540,137 +525,118 @@ variables:
 
     #[test]
     fn serialize_contexts() {
+        let captures1 = [Scope::EMPTY, Scope::new("b")];
+        let captures2 = [Scope::EMPTY, Scope::EMPTY, Scope::new("c")];
+        let with_prototype = [ContextPattern::Match(Match {
+            pattern: Pattern::from("c"),
+            scope: Scope::new("c"),
+            captures: &[],
+            change_context: ContextChange::None,
+            pop: 3,
+        })];
+        let matches = [
+            ContextPattern::Match(Match {
+                pattern: Pattern::from("(?=aa)"),
+                scope: Scope::EMPTY,
+                captures: &[],
+                change_context: ContextChange::Embed(Embed {
+                    embed: "Prolog.sublime-syntax",
+                    embed_scope: Scope::EMPTY,
+                    escape: Some(Pattern::from("</(p)>")),
+                    escape_captures: &captures2,
+                }),
+                pop: 0,
+            }),
+            ContextPattern::Match(Match {
+                pattern: Pattern::from("b"),
+                scope: Scope::EMPTY,
+                captures: &[],
+                change_context: ContextChange::IncludeEmbed(IncludeEmbed {
+                    path: "D.sublime-syntax",
+                    use_push: true,
+                    with_prototype: &with_prototype,
+                }),
+                pop: 0,
+            }),
+        ];
+
         let syntax = Syntax {
-            name: "Ctx".to_string(),
-            file_extensions: vec!["ctx".to_string()],
+            name: "Ctx",
+            file_extensions: &["ctx"],
             first_line_match: None,
-            scope: Scope::parse("source.ctx"),
+            scope: Scope::new("source.ctx"),
             hidden: false,
-            variables: HashMap::new(),
-            contexts: {
-                let mut m = HashMap::new();
-                m.insert(
-                    "foo".to_string(),
+            variables: &[],
+            contexts: &[
+                (
+                    "bar",
                     Context {
-                        meta_scope: Scope::empty(),
-                        meta_content_scope: Scope::parse("a b"),
+                        meta_scope: Scope::EMPTY,
+                        meta_content_scope: Scope::EMPTY,
+                        meta_include_prototype: false,
+                        clear_scopes: ScopeClear::Amount(0),
+                        matches: &[ContextPattern::Match(Match {
+                            pattern: Pattern::from("//"),
+                            scope: Scope::new("b"),
+                            captures: &[],
+                            change_context: ContextChange::SetEmbed(Context {
+                                meta_scope: Scope::new("c"),
+                                meta_content_scope: Scope::EMPTY,
+                                meta_include_prototype: true,
+                                clear_scopes: ScopeClear::Amount(2),
+                                matches: &matches,
+                                comment: Some("inner"),
+                            }),
+                            pop: 2,
+                        })],
+                        comment: Some("foo\nbar"),
+                    },
+                ),
+                (
+                    "foo",
+                    Context {
+                        meta_scope: Scope::EMPTY,
+                        meta_content_scope: Scope::new("a b"),
                         meta_include_prototype: true,
                         clear_scopes: ScopeClear::All,
-                        matches: vec![
-                            ContextPattern::Include("bar".to_string()),
-                            ContextPattern::Include("baz".to_string()),
+                        matches: &[
+                            ContextPattern::Include("bar"),
+                            ContextPattern::Include("baz"),
                             ContextPattern::Match(Match {
                                 pattern: Pattern::from("\\ba(b)\\b"),
-                                scope: Scope::empty(),
-                                captures: vec![
-                                    Scope::empty(),
-                                    Scope::parse("b"),
-                                ],
+                                scope: Scope::EMPTY,
+                                captures: &captures1,
                                 change_context: ContextChange::None,
                                 pop: 0,
                             }),
                             ContextPattern::Match(Match {
                                 pattern: Pattern::from("(?=\\()"),
-                                scope: Scope::parse("a b"),
-                                captures: vec![],
-                                change_context: ContextChange::Push(vec![
-                                    "foo".to_string(),
-                                ]),
+                                scope: Scope::new("a b"),
+                                captures: &[],
+                                change_context: ContextChange::Push(&["foo"]),
                                 pop: 0,
                             }),
                             ContextPattern::Match(Match {
                                 pattern: Pattern::from("(?={)"),
-                                scope: Scope::parse("a.b"),
-                                captures: vec![],
-                                change_context: ContextChange::Push(vec![
-                                    "foo".to_string(),
-                                    "bar".to_string(),
+                                scope: Scope::new("a.b"),
+                                captures: &[],
+                                change_context: ContextChange::Push(&[
+                                    "foo", "bar",
                                 ]),
                                 pop: 0,
                             }),
                             ContextPattern::Match(Match {
                                 pattern: Pattern::from(""),
-                                scope: Scope::empty(),
-                                captures: vec![],
+                                scope: Scope::EMPTY,
+                                captures: &[],
                                 change_context: ContextChange::None,
                                 pop: 1,
                             }),
                         ],
                         comment: None,
                     },
-                );
-                m.insert(
-                    "bar".to_string(),
-                    Context {
-                        meta_scope: Scope::empty(),
-                        meta_content_scope: Scope::empty(),
-                        meta_include_prototype: false,
-                        clear_scopes: ScopeClear::Amount(0),
-                        matches: vec![ContextPattern::Match(Match {
-                            pattern: Pattern::from("//"),
-                            scope: Scope::parse("b"),
-                            captures: vec![],
-                            change_context: ContextChange::SetEmbed(Context {
-                                meta_scope: Scope::parse("c"),
-                                meta_content_scope: Scope::empty(),
-                                meta_include_prototype: true,
-                                clear_scopes: ScopeClear::Amount(2),
-                                matches: vec![
-                                    ContextPattern::Match(Match {
-                                        pattern: Pattern::from("(?=aa)"),
-                                        scope: Scope::empty(),
-                                        captures: vec![],
-                                        change_context: ContextChange::Embed(
-                                            Embed {
-                                                embed: "Prolog.sublime-syntax"
-                                                    .to_string(),
-                                                embed_scope: Scope::empty(),
-                                                escape: Some(Pattern::from(
-                                                    "</(p)>",
-                                                )),
-                                                escape_captures: vec![
-                                                    Scope::empty(),
-                                                    Scope::empty(),
-                                                    Scope::parse("c"),
-                                                ],
-                                            },
-                                        ),
-                                        pop: 0,
-                                    }),
-                                    ContextPattern::Match(Match {
-                                        pattern: Pattern::from("b"),
-                                        scope: Scope::empty(),
-                                        captures: vec![],
-                                        change_context:
-                                            ContextChange::IncludeEmbed(
-                                                IncludeEmbed {
-                                                    path: "D.sublime-syntax"
-                                                        .to_string(),
-                                                    use_push: true,
-                                                    with_prototype: vec!(
-                                                ContextPattern::Match(Match {
-                                                    pattern: Pattern::from("c"),
-                                                    scope: Scope::parse("c"),
-                                                    captures: vec![],
-                                                    change_context:
-                                                        ContextChange::None,
-                                                    pop: 3,
-                                                }),
-                                            ),
-                                                },
-                                            ),
-                                        pop: 0,
-                                    }),
-                                ],
-                                comment: Some("inner".to_string()),
-                            }),
-                            pop: 2,
-                        })],
-                        comment: Some("foo\nbar".to_string()),
-                    },
-                );
-                m
-            },
+                ),
+            ],
         };
 
         let mut buf = String::new();

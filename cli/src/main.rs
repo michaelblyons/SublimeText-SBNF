@@ -46,7 +46,9 @@ fn try_main() -> Result<(), String> {
         fmt_io_err(file.read_to_string(&mut contents))?;
     }
 
-    let grammar = sbnf::sbnf::parse(&contents)
+    let compiler = sbnf::compiler::Compiler::default();
+
+    let grammar = sbnf::sbnf::parse(&contents, &compiler.allocator)
         .map_err(|e| format!("{}", e.with_source(input, &contents)))?;
 
     // Use the base name of the input as a name hint
@@ -59,7 +61,6 @@ fn try_main() -> Result<(), String> {
         entry_points: vec!["main", "prototype"],
     };
 
-    let mut compiler = sbnf::compiler::Compiler::default();
     let result = compiler.compile(&options, &grammar);
 
     match &result.result {

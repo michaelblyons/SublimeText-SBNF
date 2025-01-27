@@ -347,22 +347,30 @@ impl CallStack {
 }
 
 #[derive(Debug, Clone)]
-pub struct RuleOptions {
-    pub scope: sublime_syntax::Scope,
+pub struct RuleOptions<'a> {
+    pub scope: sublime_syntax::Scope<'a>,
     pub include_prototype: bool,
     pub capture: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct Metadata {
-    pub name: String,
-    pub file_extensions: Vec<String>,
-    pub first_line_match: Option<sublime_syntax::Pattern>,
-    pub scope: sublime_syntax::Scope,
+pub struct Metadata<'a> {
+    pub name: &'a str,
+    pub file_extensions: &'a [&'a str],
+    pub first_line_match: Option<sublime_syntax::Pattern<'a>>,
+    pub scope: sublime_syntax::Scope<'a>,
     pub scope_postfix: String,
     pub hidden: bool,
 }
 
-pub fn parse_scope(metadata: &Metadata, s: &str) -> sublime_syntax::Scope {
-    sublime_syntax::Scope::parse_with_postfix(s, &metadata.scope_postfix)
+pub fn parse_scope<'a>(
+    metadata: &Metadata,
+    s: &str,
+    compiler: &'a Compiler,
+) -> sublime_syntax::Scope<'a> {
+    sublime_syntax::Scope::parse_with_postfix(
+        s,
+        &metadata.scope_postfix,
+        &compiler.allocator,
+    )
 }

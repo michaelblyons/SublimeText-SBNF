@@ -14,7 +14,7 @@ use crate::sublime_syntax;
 pub struct Interpreted<'a> {
     pub rules: HashMap<Key, Rule<'a>>,
     pub entry_points: Vec<Key>,
-    pub metadata: Metadata,
+    pub metadata: Metadata<'a>,
 }
 
 // Key uniquely identifying a instantiated rule. This uses a symbol created
@@ -93,34 +93,34 @@ impl RawKey {
 
 #[derive(Debug, Clone)]
 pub struct Rule<'a> {
-    pub options: RuleOptions,
+    pub options: RuleOptions<'a>,
     pub expression: &'a Expression<'a>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalOptions {
-    pub scope: sublime_syntax::Scope,
-    pub captures: Vec<sublime_syntax::Scope>,
-    pub embed: TerminalEmbed,
+pub struct TerminalOptions<'a> {
+    pub scope: sublime_syntax::Scope<'a>,
+    pub captures: &'a [sublime_syntax::Scope<'a>],
+    pub embed: TerminalEmbed<'a>,
 }
 
-impl Default for TerminalOptions {
-    fn default() -> TerminalOptions {
+impl<'a> Default for TerminalOptions<'a> {
+    fn default() -> TerminalOptions<'a> {
         TerminalOptions {
-            scope: sublime_syntax::Scope::empty(),
-            captures: vec![],
+            scope: sublime_syntax::Scope::EMPTY,
+            captures: &[],
             embed: TerminalEmbed::None,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalEmbed {
+pub enum TerminalEmbed<'a> {
     Embed {
-        embed: String,
-        embed_scope: sublime_syntax::Scope,
-        escape: String,
-        escape_captures: Vec<sublime_syntax::Scope>,
+        embed: &'a str,
+        embed_scope: sublime_syntax::Scope<'a>,
+        escape: &'a str,
+        escape_captures: &'a [sublime_syntax::Scope<'a>],
     },
     Include {
         context: String,
@@ -131,13 +131,35 @@ pub enum TerminalEmbed {
 
 #[derive(Debug, Clone)]
 pub enum Expression<'a> {
-    Variable { key: Key, location: TextLocation },
-    Terminal { regex: Symbol, options: TerminalOptions, location: TextLocation },
-    Passive { expression: &'a Expression<'a>, location: TextLocation },
-    Repetition { expression: &'a Expression<'a>, location: TextLocation },
-    Optional { expression: &'a Expression<'a>, location: TextLocation },
-    Alternation { expressions: &'a [Expression<'a>], location: TextLocation },
-    Concatenation { expressions: &'a [Expression<'a>], location: TextLocation },
+    Variable {
+        key: Key,
+        location: TextLocation,
+    },
+    Terminal {
+        regex: Symbol,
+        options: TerminalOptions<'a>,
+        location: TextLocation,
+    },
+    Passive {
+        expression: &'a Expression<'a>,
+        location: TextLocation,
+    },
+    Repetition {
+        expression: &'a Expression<'a>,
+        location: TextLocation,
+    },
+    Optional {
+        expression: &'a Expression<'a>,
+        location: TextLocation,
+    },
+    Alternation {
+        expressions: &'a [Expression<'a>],
+        location: TextLocation,
+    },
+    Concatenation {
+        expressions: &'a [Expression<'a>],
+        location: TextLocation,
+    },
 }
 
 impl PartialEq for Expression<'_> {
@@ -272,9 +294,9 @@ impl std::fmt::Debug for ExpressionWithCompiler<'_> {
     }
 }
 
-struct State<'a> {
+struct State<'a, 'b> {
     compiler: &'a Compiler,
-    options: &'a CompileOptions<'a>,
+    options: &'b CompileOptions<'a>,
     seen_definitions: HashSet<Key>,
     variables: HashMap<Key, Option<Value>>,
     rules: HashMap<Key, Rule<'a>>,
@@ -285,12 +307,12 @@ struct State<'a> {
 
 struct MetaState<'a, 'b> {
     collection: &'b DefinitionMap<'a>,
-    metadata: &'b Metadata,
+    metadata: &'b Metadata<'a>,
 }
 
 pub fn interpret<'a>(
     compiler: &'a Compiler,
-    options: &'a CompileOptions<'a>,
+    options: &CompileOptions<'a>,
     collection: Collection<'a>,
 ) -> CompileResult<Interpreted<'a>> {
     let mut state = State {
@@ -339,9 +361,9 @@ pub fn interpret<'a>(
 }
 
 fn collect_metadata<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
-) -> Metadata {
+) -> Metadata<'a> {
     let name = interpret_metadata_variable(state, collection, "NAME", true)
         .map(|s| s.1)
         .or_else(|| state.options.name_hint.map(|s| trim_ascii(s).to_string()));
@@ -355,25 +377,30 @@ fn collect_metadata<'a>(
     }
 
     let file_extensions =
-        interpret_metadata_variable(state, collection, "EXTENSIONS", true);
+        interpret_metadata_variable(state, collection, "EXTENSIONS", true)
+            .map(|s| state.compiler.allocator.alloc_str(&s.1));
 
     let first_line_match =
-        interpret_metadata_variable(state, collection, "FIRST_LINE", false);
+        interpret_metadata_variable(state, collection, "FIRST_LINE", false)
+            .map(|s| state.compiler.allocator.alloc_str(&s.1));
 
     let name_ref = name.as_ref();
 
     let scope = interpret_metadata_variable(state, collection, "SCOPE", true)
         .map_or_else(
             || {
-                sublime_syntax::Scope::new(format!(
-                    "source.{}",
-                    name_ref.map_or_else(
-                        || "".to_string(),
-                        |s| s.to_ascii_lowercase()
-                    ),
-                ))
+                sublime_syntax::Scope::new(
+                    bumpalo::format!(in &state.compiler.allocator,
+                        "source.{}",
+                        name_ref.map_or_else(
+                            || "".to_string(),
+                            |s| s.to_ascii_lowercase()
+                        ),
+                    )
+                    .into_bump_str(),
+                )
             },
-            |s| sublime_syntax::Scope::parse(&s.1),
+            |s| sublime_syntax::Scope::parse(&s.1, &state.compiler.allocator),
         );
 
     let scope_postfix =
@@ -405,15 +432,13 @@ fn collect_metadata<'a>(
     };
 
     Metadata {
-        name: name.unwrap_or_default(),
+        name: state.compiler.allocator.alloc_str(&name.unwrap_or_default()),
         // File extensions are separated by whitespace
-        file_extensions: file_extensions.map_or(vec![], |s| {
-            s.1.split_ascii_whitespace()
-                .map(|s| s.to_string())
-                .collect::<Vec<String>>()
+        file_extensions: file_extensions.map_or(&[], |s| {
+            let e = s.split_ascii_whitespace().collect::<Vec<_>>();
+            state.compiler.allocator.alloc_slice_clone(&e)
         }),
-        first_line_match: first_line_match
-            .map(|s| sublime_syntax::Pattern::new(s.1)),
+        first_line_match: first_line_match.map(|s| sublime_syntax::Pattern(s)),
         scope,
         scope_postfix,
         hidden,
@@ -421,7 +446,7 @@ fn collect_metadata<'a>(
 }
 
 fn interpret_metadata_variable<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
     name: &'a str,
     is_literal: bool,
@@ -466,16 +491,14 @@ fn interpret_metadata_variable<'a>(
 }
 
 fn match_rule<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
     def_node: &'a Node<'a>,
     arguments: &[Value],
 ) -> Option<(&'a Node<'a>, VarMap)> {
     let parameters = match &def_node.data {
         NodeData::Rule { parameters, .. }
-        | NodeData::Variable { parameters, .. } => {
-            parameters.as_ref().map(|p| p.as_ref())
-        }
+        | NodeData::Variable { parameters, .. } => parameters.as_ref(),
         // Syntax parameters don't have a rule or variable node, but they also
         // never have parameters.
         _ => None,
@@ -514,7 +537,7 @@ fn match_rule<'a>(
 }
 
 fn resolve_definition<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
     reference_loc: Option<TextLocation>,
     key: &RawKey,
@@ -629,7 +652,7 @@ fn is_rule_name(name: &str) -> bool {
 }
 
 fn interpret_variable<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
     reference_loc: Option<TextLocation>,
     raw_key: RawKey,
@@ -701,7 +724,7 @@ fn interpret_variable<'a>(
 }
 
 fn interpret_rule<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     meta_state: &MetaState<'a, '_>,
     reference_loc: Option<TextLocation>,
     raw_key: &RawKey,
@@ -723,7 +746,7 @@ fn interpret_rule<'a>(
 
         let (expression_node, options_node) =
             if let NodeData::Rule { node, options, .. } = &node.data {
-                (node, options)
+                (*node, *options)
             } else {
                 panic!()
             };
@@ -752,7 +775,7 @@ fn interpret_rule<'a>(
             meta_state,
             &var_map,
             raw_key.name,
-            options_node.as_ref().map(|o| o.as_ref()),
+            options_node,
         );
 
         let expression =
@@ -771,7 +794,7 @@ fn interpret_rule<'a>(
 }
 
 fn interpret_value<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
     var_map: &VarMap,
     node: &'a Node<'a>,
@@ -809,7 +832,7 @@ fn interpret_value<'a>(
         NodeData::Reference { parameters, .. } => {
             let arguments = if let Some(param_node) = parameters {
                 let parameters = match &param_node.data {
-                    NodeData::Parameters(params) => params,
+                    NodeData::Parameters(params) => *params,
                     _ => panic!(),
                 };
 
@@ -877,7 +900,7 @@ fn interpret_value<'a>(
 }
 
 fn interpret_expression<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     meta_state: &MetaState<'a, '_>,
     var_map: &VarMap,
     node: &'a Node<'a>,
@@ -1002,7 +1025,7 @@ fn interpret_expression<'a>(
         }
         NodeData::Alternation(children) => {
             let mut expressions = vec![];
-            for child in children {
+            for child in *children {
                 if let Some(e) =
                     interpret_expression(state, meta_state, var_map, child)
                 {
@@ -1023,7 +1046,7 @@ fn interpret_expression<'a>(
         }
         NodeData::Concatenation(children) => {
             let mut expressions = vec![];
-            for child in children {
+            for child in *children {
                 if let Some(e) =
                     interpret_expression(state, meta_state, var_map, child)
                 {
@@ -1047,15 +1070,15 @@ fn interpret_expression<'a>(
 }
 
 fn parse_terminal_options<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     meta_state: &MetaState<'a, '_>,
     var_map: &VarMap,
-    node_options: &'a Option<Box<Node<'a>>>,
-    node_embed: &'a Option<Box<Node<'a>>>,
-) -> TerminalOptions {
+    node_options: &'a Option<&'a Node<'a>>,
+    node_embed: &'a Option<&'a Node<'a>>,
+) -> TerminalOptions<'a> {
     let mut options = TerminalOptions {
-        scope: sublime_syntax::Scope::empty(),
-        captures: vec![],
+        scope: sublime_syntax::Scope::EMPTY,
+        captures: &[],
         embed: parse_terminal_embed(state, meta_state, var_map, node_embed),
     };
 
@@ -1067,6 +1090,8 @@ fn parse_terminal_options<'a>(
     } else {
         return options;
     };
+
+    let mut captures = vec![];
 
     for (i, option) in node_options.iter().enumerate() {
         match &option.data {
@@ -1082,8 +1107,11 @@ fn parse_terminal_options<'a>(
                         option.text,
                     );
 
-                    options.scope =
-                        parse_scope(meta_state.metadata, &interpolated);
+                    options.scope = parse_scope(
+                        meta_state.metadata,
+                        &interpolated,
+                        state.compiler,
+                    );
                 } else {
                     state.errors.push(Error::from_str(
                         "Positional argument for terminal scope may only be the first argument",
@@ -1108,16 +1136,17 @@ fn parse_terminal_options<'a>(
                 if let Ok(group) = key.parse::<u8>() {
                     let group = group as usize;
 
-                    if group >= options.captures.len() {
-                        options.captures.resize_with(
-                            group + 1,
-                            sublime_syntax::Scope::empty,
-                        );
+                    if group >= captures.len() {
+                        captures
+                            .resize(group + 1, sublime_syntax::Scope::EMPTY);
                     }
 
-                    if options.captures[group].is_empty() {
-                        options.captures[group] =
-                            parse_scope(meta_state.metadata, &value);
+                    if captures[group].is_empty() {
+                        captures[group] = parse_scope(
+                            meta_state.metadata,
+                            &value,
+                            state.compiler,
+                        );
                     } else {
                         // TODO: Improve error message
                         state.errors.push(
@@ -1142,28 +1171,33 @@ fn parse_terminal_options<'a>(
         }
     }
 
+    if !captures.is_empty() {
+        options.captures =
+            state.compiler.allocator.alloc_slice_fill_iter(captures);
+    }
+
     options
 }
 
-fn parse_rule_options<'a, 'b>(
-    state: &mut State<'a>,
-    meta_state: &MetaState<'a, 'b>,
+fn parse_rule_options<'a>(
+    state: &mut State<'a, '_>,
+    meta_state: &MetaState<'a, '_>,
     var_map: &VarMap,
     name: Symbol,
     options: Option<&'a Node<'a>>,
-) -> RuleOptions {
-    let mut scope = sublime_syntax::Scope::empty();
+) -> RuleOptions<'a> {
+    let mut scope = sublime_syntax::Scope::EMPTY;
     let mut include_prototype: Option<(&'a Node<'a>, bool)> = None;
 
     {
         let name = state.compiler.resolve_symbol(name);
 
         if state.options.debug_contexts {
-            if !scope.is_empty() {
-                scope.0.push(' ');
-            }
-            scope.0.push_str(name);
-            scope.0.push_str(".sbnf-dbg");
+            scope = sublime_syntax::Scope::new(if scope.is_empty() {
+                bumpalo::format!(in &state.compiler.allocator, "{}.sbnf-dbg", name)
+            } else {
+                bumpalo::format!(in &state.compiler.allocator, "{} {}.sbnf-dbg", scope.as_str(), name)
+            }.into_bump_str());
         }
 
         if options.is_none() {
@@ -1189,7 +1223,8 @@ fn parse_rule_options<'a, 'b>(
                 argument.location,
                 argument.text,
             );
-            scope = parse_scope(meta_state.metadata, &interpolated);
+            scope =
+                parse_scope(meta_state.metadata, &interpolated, state.compiler);
         } else if argument.data == NodeData::PositionalOption {
             state.errors.push(Error::from_str(
                 "Rules may only have one positional argument specifying the meta scope",
@@ -1253,11 +1288,11 @@ fn parse_rule_options<'a, 'b>(
 }
 
 fn parse_terminal_embed<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     meta_state: &MetaState<'a, '_>,
     var_map: &VarMap,
-    node_embed: &'a Option<Box<Node<'a>>>,
-) -> TerminalEmbed {
+    node_embed: &'a Option<&'a Node<'a>>,
+) -> TerminalEmbed<'a> {
     let node_embed = if let Some(n) = node_embed.as_ref() {
         n
     } else {
@@ -1370,7 +1405,7 @@ fn parse_terminal_embed<'a>(
             _ => panic!(),
         };
 
-        let mut embed_scope = sublime_syntax::Scope::empty();
+        let mut embed_scope = sublime_syntax::Scope::EMPTY;
         let mut escape_captures = vec![];
 
         for (i, option) in options[1..].iter().enumerate() {
@@ -1387,8 +1422,11 @@ fn parse_terminal_embed<'a>(
                             option.text,
                         );
 
-                        embed_scope =
-                            parse_scope(meta_state.metadata, &interpolated);
+                        embed_scope = parse_scope(
+                            meta_state.metadata,
+                            &interpolated,
+                            state.compiler,
+                        );
                     } else {
                         state.errors.push(Error::from_str(
                             "Positional argument for escape scope may only be the second argument",
@@ -1413,15 +1451,18 @@ fn parse_terminal_embed<'a>(
                     if let Ok(group) = key.parse::<u8>() {
                         let group = group as usize;
                         if group >= escape_captures.len() {
-                            escape_captures.resize_with(
+                            escape_captures.resize(
                                 group + 1,
-                                sublime_syntax::Scope::empty,
+                                sublime_syntax::Scope::EMPTY,
                             );
                         }
 
                         if escape_captures[group].is_empty() {
-                            escape_captures[group] =
-                                parse_scope(meta_state.metadata, &value);
+                            escape_captures[group] = parse_scope(
+                                meta_state.metadata,
+                                &value,
+                                state.compiler,
+                            );
                         } else {
                             // TODO: Improve error message
                             state.errors.push(
@@ -1446,7 +1487,15 @@ fn parse_terminal_embed<'a>(
             }
         }
 
-        TerminalEmbed::Embed { embed, embed_scope, escape, escape_captures }
+        TerminalEmbed::Embed {
+            embed: state.compiler.allocator.alloc_str(&embed),
+            embed_scope,
+            escape: state.compiler.allocator.alloc_str(&escape),
+            escape_captures: state
+                .compiler
+                .allocator
+                .alloc_slice_clone(&escape_captures),
+        }
     } else if node_embed.text == "include" {
         // Include take a single parameter as the rule for the with_prototype
         if parameters.len() != 1 {
@@ -1600,7 +1649,7 @@ fn str_from_iterators<'a>(
 // TODO: Tests
 // TODO: Move to parser
 fn interpolate_string<'a>(
-    state: &mut State<'a>,
+    state: &mut State<'a, '_>,
     collection: &DefinitionMap<'a>,
     var_map: &VarMap,
     location: TextLocation,
@@ -1765,7 +1814,7 @@ pub mod tests {
 
     pub fn expr_trm<'a>(
         regex: Symbol,
-        options: TerminalOptions,
+        options: TerminalOptions<'a>,
     ) -> Expression<'a> {
         Expression::Terminal { regex, options, location: TextLocation::INITIAL }
     }
