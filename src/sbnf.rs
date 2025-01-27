@@ -345,7 +345,7 @@ struct Parser<'a> {
     location: TextLocation,
 
     current: Chars<'a>,
-    peeked_char: Option<char>,
+    peek: Option<(char, Chars<'a>)>,
 }
 
 // A fast way to convert an interval of iterators to a substring. Rust should
@@ -366,24 +366,26 @@ fn str_from_iterators<'a>(
 
 impl<'a> Parser<'a> {
     fn peek(&mut self) -> Option<char> {
-        if let Some(chr) = self.peeked_char {
-            Some(chr)
+        if let Some((chr, _)) = &self.peek {
+            Some(*chr)
         } else {
             let mut ahead = self.current.clone();
-            self.peeked_char = ahead.next();
-            self.peeked_char
+            let chr = ahead.next()?;
+            self.peek = Some((chr, ahead));
+            Some(chr)
         }
     }
 
     fn next(&mut self) -> Option<char> {
-        self.peeked_char = None;
-        let result = self.current.next();
+        let chr = if let Some((chr, iter)) = self.peek.take() {
+            self.current = iter;
+            chr
+        } else {
+            self.current.next()?
+        };
 
-        if let Some(chr) = result {
-            self.location.increment(chr);
-        }
-
-        result
+        self.location.increment(chr);
+        Some(chr)
     }
 
     fn char_error(&self, message: String) -> ParseError {
@@ -466,7 +468,7 @@ pub fn parse<'a>(
         allocator,
         location: TextLocation::INITIAL,
         current: source.chars(),
-        peeked_char: None,
+        peek: None,
     };
 
     let mut nodes = vec![];
