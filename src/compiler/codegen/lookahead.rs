@@ -189,7 +189,7 @@ impl<'a> TerminalStackIteratorItem<'a, '_> {
 
 impl<'a> PartialEq<StackEntry<'a>> for TerminalStackIteratorItem<'a, '_> {
     fn eq(&self, other: &StackEntry<'a>) -> bool {
-        self.data.map_or(false, |d| *d == other.data)
+        self.data.is_some_and(|d| *d == other.data)
             && *self.remaining == other.remaining
     }
 }
@@ -1270,7 +1270,7 @@ mod tests {
             assert_eq!(term0.stack.len(), 1);
             assert_eq!(term0.stack[0].data, sed_var(r_key));
             assert_eq!(term0.stack[0].remaining.len(), 1);
-            assert_eq!(term0.stack[0].remaining[0], &expr_var(m_key.clone()));
+            assert_eq!(term0.stack[0].remaining[0], &expr_var(m_key));
         });
     }
 }

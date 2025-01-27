@@ -391,7 +391,7 @@ fn gen_contexts<'a>(
                     */
                     let is_last = i != num_terminals - 1;
                     let can_fail = is_last
-                        && branch_point.as_ref().map_or(true, |bp| bp.can_fail);
+                        && branch_point.as_ref().is_none_or(|bp| bp.can_fail);
                     let branch_point_name = match &branch_point {
                         Some(branch_point) if !can_fail => branch_point.name,
                         _ => branch_point_name,

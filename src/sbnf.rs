@@ -1,6 +1,7 @@
-use bumpalo::Bump;
+use crate::util::str_from_iterators;
 /// This file implements a parser for the SBNF grammar
-use std::str::{from_utf8_unchecked, Chars};
+use bumpalo::Bump;
+use std::str::Chars;
 
 #[derive(Debug)]
 pub struct Grammar<'a> {
@@ -346,22 +347,6 @@ struct Parser<'a> {
 
     current: Chars<'a>,
     peek: Option<(char, Chars<'a>)>,
-}
-
-// A fast way to convert an interval of iterators to a substring. Rust should
-// at least have an easy way to get byte indices from Chars :(
-fn str_from_iterators<'a>(
-    string: &'a str,
-    start: Chars<'a>,
-    end: Chars<'a>,
-) -> &'a str {
-    // Convert start and end into byte offsets
-    let bytes_start = string.as_bytes().len() - start.as_str().as_bytes().len();
-    let bytes_end = string.as_bytes().len() - end.as_str().as_bytes().len();
-
-    // SAFETY: As long as the iterators are from the string the byte offsets
-    // will always be valid.
-    unsafe { from_utf8_unchecked(&string.as_bytes()[bytes_start..bytes_end]) }
 }
 
 impl<'a> Parser<'a> {
@@ -1409,7 +1394,7 @@ mod tests {
         )
     }
 
-    fn keyopt<'a>(value: &'a str, value_loc: (u32, u32)) -> Node<'a> {
+    fn keyopt(value: &str, value_loc: (u32, u32)) -> Node {
         Node::new(
             value,
             TextLocation::from_tuple(value_loc),

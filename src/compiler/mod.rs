@@ -70,7 +70,7 @@ mod tests {
                 println!(
                     "{}",
                     error.with_compiler_and_source(
-                        &compiler, "ERROR", "test", source
+                        compiler, "ERROR", "test", source
                     )
                 );
             }
@@ -82,7 +82,7 @@ mod tests {
                 println!(
                     "{}",
                     warning.with_compiler_and_source(
-                        &compiler, "WARNING", "test", source
+                        compiler, "WARNING", "test", source
                     )
                 );
             }

@@ -34,7 +34,9 @@ pub fn compile(
 ) -> CompileResult {
     let input = "web";
 
-    let grammar_result = sbnf::sbnf::parse(source);
+    let compiler = sbnf::compiler::Compiler::default();
+
+    let grammar_result = sbnf::sbnf::parse(source, &compiler.allocator);
 
     if let Err(error) = grammar_result {
         return CompileResult {
@@ -57,8 +59,6 @@ pub fn compile(
         arguments,
         entry_points: vec!["main", "prototype"],
     };
-
-    let mut compiler = sbnf::compiler::Compiler::default();
 
     let result = compiler.compile(&options, &grammar);
 
