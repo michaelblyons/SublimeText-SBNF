@@ -10,9 +10,9 @@
             "releases": [
                 {
                     "sublime_text": ">4077",
-                    "version": "0.6.4",
-                    "url": "https://github.com/BenjaminSchaaf/sbnf/releases/download/0.6.4/SBNF.sublime-package",
-                    "date": "2023-10-09 13:31:56"
+                    "version": "0.6.5",
+                    "url": "https://github.com/BenjaminSchaaf/sbnf/releases/download/0.6.5/SBNF.sublime-package",
+                    "date": "2025-01-29 14:31:40"
                 }
             ]
         }
