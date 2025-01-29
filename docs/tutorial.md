@@ -329,7 +329,7 @@ also specify scopes to assign to regex capture groups.
 For example:
 
 ```sbnf
-main : '([a-zA-Z]+)(?:(\.)([a-zA-Z]+))*'
+main : '([a-zA-Z]+)((\.)([a-zA-Z]+))?'
        {meta.path, 1: entity.name, 2: punctuation, 3: entity.name}
      ;
 ```
