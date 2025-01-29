@@ -76,7 +76,6 @@ impl<'a> Node<'a> {
             NodeData::Optional(_) => "opt",
             NodeData::Alternation(_) => "alt",
             NodeData::Concatenation(_) => "cat",
-            NodeData::Capture(_) => "cap",
             NodeData::KeywordOption(_) => "kwopt",
             NodeData::PositionalOption => "popt",
             NodeData::KeywordOptionValue => "kopt",
@@ -146,9 +145,6 @@ impl std::fmt::Debug for Node<'_> {
                 }
                 write!(f, ")")?;
             }
-            NodeData::Capture(node) => {
-                write!(f, "!({:?})", node)?;
-            }
             NodeData::KeywordOption(node) => {
                 write!(f, "{}: {:?}", self.text, node)?;
             }
@@ -207,8 +203,6 @@ pub enum NodeData<'a> {
     Alternation(&'a [Node<'a>]),
     // a b
     Concatenation(&'a [Node<'a>]),
-    // !
-    Capture(&'a Node<'a>),
     // {positional-option}
     PositionalOption,
     // {keyword: option}
@@ -969,14 +963,7 @@ fn parse_rule_element<'a>(
     let col = parser.start_node_collection();
 
     if let Some(chr) = parser.peek() {
-        if chr == '!' {
-            parser.next();
-
-            let node = col.end_from_parser(parser);
-
-            let contents = parse_rule_element_contents(parser, depth)?;
-            Ok(node.build(NodeData::Capture(parser.alloc(contents))))
-        } else if chr == '~' {
+        if chr == '~' {
             parser.next();
 
             let node = col.end_from_parser(parser);
@@ -1370,10 +1357,6 @@ mod tests {
         )
     }
 
-    fn capture<'a>(loc: (u32, u32), node: &'a Node<'a>) -> Node<'a> {
-        Node::new("!", TextLocation::from_tuple(loc), NodeData::Capture(node))
-    }
-
     fn arg(value: &str, loc: (u32, u32)) -> Node<'_> {
         Node::new(
             value,
@@ -1519,7 +1502,7 @@ mod tests {
                 ]
         );
         assert!(
-            parse("a:~(b c)? (d|(e)|f) !g*;", &a).unwrap().nodes
+            parse("a:~(b c)? (d|(e)|f) ~g*;", &a).unwrap().nodes
                 == [&rule(
                     "a",
                     (0, 0),
@@ -1549,7 +1532,7 @@ mod tests {
                                     refr("f", (0, 17), None, None),
                                 ]
                             ),
-                            capture(
+                            passive(
                                 (0, 20),
                                 &repetition(
                                     (0, 22),
