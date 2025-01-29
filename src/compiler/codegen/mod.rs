@@ -373,11 +373,22 @@ fn gen_contexts<'a>(
                 let num_terminals = terminal_indexes.len();
 
                 // println!("START BRANCH {:?}", branch_point_name);
+                let mut is_repetition = true;
 
                 for (i, terminal_index) in
                     terminal_indexes.into_iter().enumerate()
                 {
                     let terminal = &lookahead.terminals[terminal_index];
+
+                    if !matches!(
+                        terminal.stack.last(),
+                        Some(StackEntry {
+                            data: StackEntryData::Repetition { .. },
+                            ..
+                        })
+                    ) {
+                        is_repetition = false;
+                    }
 
                     /*
                     The last branch of a branch point can't fail the branch;
@@ -518,6 +529,8 @@ fn gen_contexts<'a>(
                 )
                 .into_bump_str();
 
+                let pop = if is_repetition { 0 } else { 1 };
+
                 let matches = state.compiler.allocator.alloc_slice_clone(&[
                     sublime_syntax::ContextPattern::Match(
                         sublime_syntax::Match {
@@ -529,7 +542,7 @@ fn gen_contexts<'a>(
                                     branch_point_name,
                                     branches,
                                 ),
-                            pop: 0,
+                            pop,
                         },
                     ),
                 ]);
@@ -968,27 +981,14 @@ fn gen_simple_match<'a>(
         )
     };
 
-    let (exit, mut pop) = if contexts.is_empty() {
-        // let pop = if interpreted.rules.get(rule_key).unwrap().options.capture {
-        //     0
-        // } else {
-        //     1
-        // };
-        let pop = 1;
-
-        (sublime_syntax::ContextChange::None, pop)
+    let pop = 1;
+    let exit = if contexts.is_empty() {
+        sublime_syntax::ContextChange::None
     } else {
-        (
-            sublime_syntax::ContextChange::Push(
-                state.compiler.allocator.alloc_slice_clone(&contexts),
-            ),
-            1,
+        sublime_syntax::ContextChange::Push(
+            state.compiler.allocator.alloc_slice_clone(&contexts),
         )
     };
-
-    if branch_point.is_some() && !terminal.has_any_remaining() {
-        pop += 1;
-    }
 
     gen_terminal(
         state,

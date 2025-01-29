@@ -1,0 +1,3 @@
+IDENT = '[a-z]+'
+main : (`import`{keyword} maybe-aliased-item `;`{punctuation.terminator})* ;
+maybe-aliased-item : IDENT{entity.other} `as`{keyword} IDENT{entity.name} | IDENT{entity.name} ;

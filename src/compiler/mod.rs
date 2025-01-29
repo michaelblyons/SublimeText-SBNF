@@ -544,7 +544,7 @@ mod tests {
                     scope: Scope::new("a.test"),
                     captures: &[],
                     change_context: ContextChange::None,
-                    pop: 2,
+                    pop: 1,
                 }),
                 ContextPattern::Match(Match {
                     pattern: Pattern::from("\\S"),
@@ -576,7 +576,7 @@ mod tests {
                     scope: Scope::new("b.test"),
                     captures: &[],
                     change_context: ContextChange::None,
-                    pop: 2,
+                    pop: 1,
                 }),
                 ContextPattern::Match(Match {
                     pattern: Pattern::from("\\S"),
@@ -660,7 +660,7 @@ mod tests {
                     scope: Scope::EMPTY,
                     captures: &[],
                     change_context: ContextChange::None,
-                    pop: 2,
+                    pop: 1,
                 }),
                 ContextPattern::Match(Match {
                     pattern: Pattern::from("\\S"),

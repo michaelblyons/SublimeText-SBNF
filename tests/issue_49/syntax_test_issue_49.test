@@ -1,0 +1,19 @@
+# SYNTAX TEST "Packages/tests/issue_49/issue_49.sublime-syntax"
+
+  import a as b; import c; import d; import e as f;
+# ^^^^^^ keyword
+#        ^ entity.other
+#          ^^ keyword
+#             ^ entity.name
+#              ^ punctuation.terminator
+#                ^^^^^^ keyword
+#                       ^ entity.name
+#                        ^ punctuation.terminator
+#                          ^^^^^^ keyword
+#                                 ^ entity.name
+#                                  ^ punctuation.terminator
+#                                    ^^^^^^ keyword
+#                                           ^ entity.other
+#                                             ^^ keyword
+#                                                ^ entity.name
+#                                                 ^ punctuation.terminator
