@@ -124,7 +124,7 @@ pub enum TerminalEmbed<'a> {
         escape_captures: &'a [sublime_syntax::Scope<'a>],
     },
     Include {
-        context: String,
+        context: &'a str,
         prototype: Key,
     },
     None,
@@ -1607,7 +1607,7 @@ fn parse_terminal_embed<'a>(
         };
 
         TerminalEmbed::Include {
-            context,
+            context: state.compiler.allocator.alloc_str(&context),
             prototype: prototype.mangle(state.compiler),
         }
     } else {
