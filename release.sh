@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 
+if [[ "$1" == "--help" ]]; then
+    echo "Usage: $(basename "$0") VERSION [PART]"
+    echo ""
+    echo "  VERSION   The version to release"
+    echo "  PART      One of 'all', 'website', 'package' or 'crate'."
+    echo "            Dictates which thing to release. Default is 'all'."
+    exit 0
+fi
+
 set -ex
 
 REPO_DIR=$(dirname "$0")
@@ -9,6 +18,11 @@ VERSION=$1
 
 if [[ -z "$VERSION" ]]; then
     echo "Please provide a version number"
+    exit 1
+fi
+
+if [[ ! "$VERSION" =~ ^[0-9\.]+(-[a-zA-Z0-9]+)?$ ]]; then
+    echo "Provided version number is invalid"
     exit 1
 fi
 
@@ -33,6 +47,11 @@ fi
 
 if ! type gh >/dev/null 2>&1; then
     echo "'gh' not installed"
+    exit 1
+fi
+
+if ! gh auth status; then
+    echo "Not authenticated. Please run 'gh auth login'"
     exit 1
 fi
 
@@ -173,7 +192,7 @@ fi
 
 # Do release after confirmation
 echo "Release Prepared"
-read -p "Do you want to continue? (y/Y): " CONFIRMATION
+read -p "Do you want to continue? (y/N): " CONFIRMATION
 
 if [[ $CONFIRMATION == 'y' || $CONFIRMATION == 'Y' ]]; then
     if [[ $PART == 'all' || $PART == 'package' ]]; then
