@@ -3,10 +3,7 @@
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-
-#[macro_use]
-extern crate clap;
-extern crate sbnf;
+use clap::{Command, arg, crate_version};
 
 fn main() {
     std::process::exit(match try_main() {
@@ -24,21 +21,21 @@ fn fmt_io_err<T>(r: std::io::Result<T>) -> Result<T, String> {
 }
 
 fn try_main() -> Result<(), String> {
-    let matches = clap_app!(myapp =>
-        (name: "SBNF compiler")
-        (version: crate_version!())
-        (@arg quiet: -q "Do not display warnings")
-        (@arg debug: -g "Compile with debug scopes")
-        (@arg output: -o +takes_value "The file to write the compiled sublime-syntax to. \
+    let matches = Command::new("SBNF compiler")
+        .version(crate_version!())
+        .about(format!("SBNF compiler {}", crate_version!()))
+        .arg(arg!(quiet: -q "Do not display warnings"))
+        .arg(arg!(debug: -g "Compile with debug scopes"))
+        .arg(arg!(output: -o <FILE> "The file to write the compiled sublime-syntax to. \
          Defaults to $INPUT.sublime-syntax if left out. Use a single dash `-` \
-         to write to stdout instead.")
-        (@arg INPUT: +required "The SBNF file to compile")
-        (@arg ARGS: ... "Arguments to pass to the main and prototype rules")
-        ).get_matches();
+         to write to stdout instead."))
+        .arg(arg!(<INPUT> "The SBNF file to compile"))
+        .arg(arg!(<ARGS> ... "Arguments to pass to the main and prototype rules").required(false))
+        .get_matches();
 
-    let input = matches.value_of("INPUT").unwrap();
-    let output = matches.value_of("output");
-    let args = matches.values_of("ARGS");
+    let input = matches.get_one::<String>("INPUT").unwrap();
+    let output = matches.get_one::<String>("output");
+    let args = matches.get_many::<String>("ARGS");
 
     let mut contents = String::new();
     {
@@ -56,8 +53,8 @@ fn try_main() -> Result<(), String> {
 
     let options = sbnf::compiler::CompileOptions {
         name_hint: Some(name_hint),
-        debug_contexts: matches.is_present("debug"),
-        arguments: args.map(|a| a.collect::<Vec<_>>()).unwrap_or(vec![]),
+        debug_contexts: matches.get_flag("debug"),
+        arguments: args.map(|args| args.map(|a| a.as_str()).collect::<Vec<_>>()).unwrap_or(vec![]),
         entry_points: vec!["main", "prototype"],
     };
 
@@ -74,7 +71,7 @@ fn try_main() -> Result<(), String> {
                 );
             }
 
-            if !matches.is_present("quiet") {
+            if !matches.get_flag("quiet") {
                 for warning in result.warnings {
                     eprintln!(
                         "{}",
@@ -88,7 +85,7 @@ fn try_main() -> Result<(), String> {
             Err("Compilation Failed".to_string())
         }
         Ok(syntax) => {
-            if !matches.is_present("quiet") {
+            if !matches.get_flag("quiet") {
                 for warning in result.warnings {
                     eprintln!(
                         "{}",
@@ -104,7 +101,7 @@ fn try_main() -> Result<(), String> {
                 .serialize(&mut output_buffer)
                 .map_err(|e| format!("{}", e))?;
 
-            let output_path = match output {
+            let output_path = match output.map(|s| s.as_str()) {
                 Some("-") => None,
                 Some(path) => Some(PathBuf::from(path)),
                 None => {
