@@ -1,9 +1,9 @@
 #![deny(clippy::all)]
 
+use clap::{arg, crate_version, Command};
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::{Path, PathBuf};
-use clap::{Command, arg, crate_version};
 
 fn main() {
     std::process::exit(match try_main() {
@@ -54,7 +54,9 @@ fn try_main() -> Result<(), String> {
     let options = sbnf::compiler::CompileOptions {
         name_hint: Some(name_hint),
         debug_contexts: matches.get_flag("debug"),
-        arguments: args.map(|args| args.map(|a| a.as_str()).collect::<Vec<_>>()).unwrap_or(vec![]),
+        arguments: args
+            .map(|args| args.map(|a| a.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default(),
         entry_points: vec!["main", "prototype"],
     };
 
