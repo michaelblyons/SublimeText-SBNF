@@ -1,6 +1,7 @@
 # SBNF
 
-[![Build Status](https://github.com/BenjaminSchaaf/sbnf/actions/workflows/rust.yml/badge.svg)](https://github.com/BenjaminSchaaf/sbnf/actions) [![Crate](https://badgen.net/crates/v/sbnf)](https://crates.io/crates/sbnf)
+[![Build Status](https://github.com/BenjaminSchaaf/sbnf/actions/workflows/rust.yml/badge.svg)](https://github.com/BenjaminSchaaf/sbnf/actions)
+[![Crate](https://badgen.net/crates/v/sbnf)](https://crates.io/crates/sbnf)
 
 A BNF-style language for writing sublime-syntax files.
 
@@ -28,12 +29,10 @@ Text build 4077 with support for version 2 of Sublime Syntax.
 
 ### Sublime Package
 
-Navigate to the [Releases page]
-(https://github.com/BenjaminSchaaf/sbnf/releases) and download the
-`SBNF.sublime-package` file. This is a zip file. You'll need to extract the
-contents of this zip file into the `Packages/SBNF` folder within the
-[Sublime Text data directory]
-(https://www.sublimetext.com/docs/side_by_side.html).
+Navigate to the [Releases page](https://github.com/BenjaminSchaaf/sbnf/releases)
+and download the `SBNF.sublime-package` file. This is a zip file. You'll need to
+extract the contents of this zip file into the `Packages/SBNF` folder within the
+[Sublime Text data directory](https://www.sublimetext.com/docs/side_by_side.html).
 
 ### Cargo
 
@@ -618,4 +617,4 @@ understand any regexes.
 * Fix known edge cases in compiler. In a couple places we panic!() instead of
   providing an implementation.
 * Add warnings for when branches are used in non-popping loops.
-* Fix infinite loop/recursion when rule refers to itself
+* Fix infinite loop/recursion when rule refers to itself.
