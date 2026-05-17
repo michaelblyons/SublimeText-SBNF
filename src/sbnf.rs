@@ -1377,7 +1377,7 @@ mod tests {
         )
     }
 
-    fn keyopt(value: &str, value_loc: (u32, u32)) -> Node {
+    fn keyopt<'a>(value: &'a str, value_loc: (u32, u32)) -> Node<'a> {
         Node::new(
             value,
             TextLocation::from_tuple(value_loc),

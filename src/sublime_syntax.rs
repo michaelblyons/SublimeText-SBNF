@@ -1,3 +1,5 @@
+#![allow(unused_assignments)]
+
 /// This file describes the structure of sublime-syntax files and defines a
 /// serializer for it.
 use bumpalo::Bump;
